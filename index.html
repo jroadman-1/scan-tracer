@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Scan Tracer</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <div class="brand" title="Scan Tracer"><span class="brand-mark"></span><span class="brand-name">Scan Tracer</span></div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn" id="btn-open" title="Open a scan (⌘O)"><i data-icon="open"></i><span>Open</span></button>
+            <div class="tb-split">
+              <button class="tb-btn" id="btn-export" disabled><i></i><span></span></button>
+              <button class="tb-caret" id="caret-export" disabled title="Export options" aria-label="Export options"><i data-icon="chevron"></i></button>
+            </div>
+          </div>
+          <div class="tb-label">File</div>
+        </div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn" id="btn-plane" disabled title="3-Point Plane: pick 3 points to make a surface the XY plane"><i data-icon="plane"></i><span>3-Pt Plane</span></button>
+            <button class="tb-btn" id="btn-straighten" disabled title="Pick 2 points to turn a line horizontal or vertical"><i data-icon="straighten"></i><span>Straighten</span></button>
+            <button class="tb-btn" id="btn-flip" disabled title="Turn the scan 180° within the sketch plane"><i data-icon="flip"></i><span>Flip 180°</span></button>
+            <button class="tb-btn" id="btn-origin" disabled title="Pick the point that becomes X 0, Y 0"><i data-icon="origin"></i><span>Set Origin</span></button>
+          </div>
+          <div class="tb-label">Align</div>
+        </div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn" id="btn-point" disabled title="Point (P)"><i data-icon="point"></i><span>Point</span></button>
+            <button class="tb-btn" id="btn-line" disabled title="Line (L)"><i data-icon="line"></i><span>Line</span></button>
+            <div class="tb-split">
+              <button class="tb-btn" id="btn-rect" disabled><i></i><span></span></button>
+              <button class="tb-caret" id="caret-rect" disabled title="Rectangle types" aria-label="Rectangle types"><i data-icon="chevron"></i></button>
+            </div>
+            <div class="tb-split">
+              <button class="tb-btn" id="btn-circle" disabled><i></i><span></span></button>
+              <button class="tb-caret" id="caret-circle" disabled title="Circle types" aria-label="Circle types"><i data-icon="chevron"></i></button>
+            </div>
+            <button class="tb-btn" id="btn-spline" disabled title="Fit-Point Spline (S)"><i data-icon="spline"></i><span>Spline</span></button>
+          </div>
+          <div class="tb-label">Sketch</div>
+        </div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn" id="btn-trim" disabled title="Trim (T)"><i data-icon="trim"></i><span>Trim</span></button>
+            <button class="tb-btn" id="btn-extend" disabled title="Extend a line to the next shape"><i data-icon="extend"></i><span>Extend</span></button>
+          </div>
+          <div class="tb-label">Modify</div>
+        </div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn tb-icon" id="btn-dim" disabled title="Dimension (D): add or change a size"><i data-icon="dimension"></i></button>
+            <button class="tb-btn tb-icon" id="btn-hv" disabled title="Horizontal / Vertical: make lines horizontal or vertical"><i data-icon="hv"></i></button>
+            <button class="tb-btn tb-icon" id="btn-perp" disabled title="Perpendicular: make a line perpendicular to another"><i data-icon="perpendicular"></i></button>
+            <button class="tb-btn tb-icon" id="btn-parallel" disabled title="Parallel: make a line parallel to another"><i data-icon="parallel"></i></button>
+            <button class="tb-btn tb-icon" id="btn-coincident" disabled title="Coincident: move a point onto another point or a curve"><i data-icon="coincident"></i></button>
+          </div>
+          <div class="tb-label">Constrain</div>
+        </div>
+
+        <div class="tb-group">
+          <div class="tb-row">
+            <button class="tb-btn" id="btn-2d" disabled title="Look straight down at a sketch plane"><i data-icon="sketch2d"></i><span>2D View</span></button>
+            <button class="tb-btn" id="btn-fit" title="Fit the scan in view (F)"><i data-icon="fit"></i><span>Fit</span></button>
+          </div>
+          <div class="tb-label">View</div>
+        </div>
+
+        <div class="tb-spacer"></div>
+
+        <div class="tb-group tb-group-end">
+          <div class="tb-row">
+            <button class="tb-btn tb-compact" id="btn-undo" disabled title="Undo (⌘Z)"><i data-icon="undo"></i></button>
+            <button class="tb-btn tb-compact" id="btn-redo" disabled title="Redo (⌘⇧Z)"><i data-icon="redo"></i></button>
+            <button class="tb-btn tb-compact" id="btn-settings" title="Settings"><i data-icon="settings"></i></button>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="browser">
+          <div class="panel-title">Browser</div>
+          <section>
+            <h3>Scan</h3>
+            <div id="scan-info" class="muted">No scan loaded</div>
+          </section>
+          <section>
+            <h3>Sketch</h3>
+            <div id="sketch-list" class="muted">Nothing drawn yet</div>
+          </section>
+        </aside>
+
+        <main class="viewport" id="viewport">
+          <div class="empty" id="empty">
+            <div class="card empty-card">
+              <i data-icon="open" class="empty-icon"></i>
+              <h2>Open a scan</h2>
+              <p>Drop an OBJ or STL file here, or</p>
+              <button class="btn-primary" id="btn-open-empty">Choose file…</button>
+              <p class="fine">Files are processed on this computer and never uploaded.</p>
+            </div>
+          </div>
+
+          <div class="loading" id="loading" hidden>
+            <div class="card loading-card">
+              <div class="loading-name" id="loading-name"></div>
+              <div class="bar"><div class="bar-fill" id="loading-bar"></div></div>
+              <div class="muted" id="loading-stage"></div>
+            </div>
+          </div>
+
+          <div class="drop-hint" id="drop-hint" hidden><div>Drop to open</div></div>
+
+          <div class="card display-panel" id="display-panel" hidden>
+            <div class="seg" id="shade-seg">
+              <button data-value="clay" title="Clay (1)">Clay</button>
+              <button data-value="curvature" title="Curvature (2)">Curvature</button>
+              <button data-value="height" title="Height (3)">Height</button>
+            </div>
+            <label class="dp-row" data-for="curvature">
+              <span>Contrast</span><input type="range" id="curv-gain" min="0.2" max="3" step="0.05" value="0.8" />
+            </label>
+            <label class="dp-row" data-for="height">
+              <span>Low</span><input type="range" id="h-low" min="0" max="1" step="0.001" value="0" />
+            </label>
+            <label class="dp-row" data-for="height">
+              <span>High</span><input type="range" id="h-high" min="0" max="1" step="0.001" value="1" />
+            </label>
+            <label class="dp-row" data-for="height">
+              <span>Contours</span>
+              <select id="h-contour">
+                <option value="0">Off</option>
+                <option value="0.1">0.1 mm</option>
+                <option value="0.25">0.25 mm</option>
+                <option value="0.5">0.5 mm</option>
+                <option value="1">1 mm</option>
+                <option value="2">2 mm</option>
+              </select>
+            </label>
+            <label class="dp-row dp-toggle">
+              <input type="checkbox" id="show-vertices" /><span>Show vertices</span><kbd>V</kbd>
+            </label>
+          </div>
+
+          <div class="card navbar" id="navbar" hidden>
+            <button id="nav-orbit" title="Orbit tool: drag to orbit (O)"><i data-icon="orbit"></i></button>
+            <button id="nav-pan" title="Pan tool: drag to pan"><i data-icon="pan"></i></button>
+            <span class="sep"></span>
+            <button id="nav-fit" title="Fit (F)"><i data-icon="fit"></i></button>
+            <button id="nav-home" title="Home view"><i data-icon="home"></i></button>
+          </div>
+
+          <div class="card cmd-panel" id="cmd-panel" hidden></div>
+
+          <div class="card view2d-bar" id="view2d-bar" hidden>
+            <span class="view2d-label">2D</span>
+            <div class="seg" id="plane-seg">
+              <button data-value="top">Top</button>
+              <button data-value="front">Front</button>
+              <button data-value="right">Right</button>
+            </div>
+            <button class="btn-secondary" id="btn-exit-2d" title="Back to 3D">Exit 2D</button>
+          </div>
+
+          <div class="cursor-label" id="cursor-label" hidden></div>
+
+          <div class="toast" id="toast" hidden></div>
+        </main>
+      </div>
+
+      <footer class="statusbar">
+        <span id="prompt">Open a scan to begin</span>
+        <span class="grow"></span>
+        <span id="coords" class="mono"></span>
+        <span id="nav-hint" class="muted"></span>
+        <button class="chip chip-btn" id="units-chip" title="Switch between millimeters and inches">mm</button>
+      </footer>
+    </div>
+
+    <div class="card popover" id="settings" hidden>
+      <h4>Navigation</h4>
+      <div class="seg" data-setting="nav">
+        <button data-value="trackpad">Trackpad</button>
+        <button data-value="mouse">Mouse</button>
+      </div>
+      <label class="check" id="swap-row"><input type="checkbox" id="set-swap" /> Swipe orbits, ⇧ + swipe pans</label>
+      <p class="fine" id="nav-help"></p>
+      <h4>Units</h4>
+      <div class="seg" data-setting="units">
+        <button data-value="mm">Millimeters</button>
+        <button data-value="in">Inches</button>
+      </div>
+      <h4>Projection</h4>
+      <div class="seg" data-setting="projection">
+        <button data-value="perspective">Perspective</button>
+        <button data-value="ortho">Orthographic</button>
+      </div>
+      <h4>Theme</h4>
+      <div class="seg" data-setting="theme">
+        <button data-value="auto">Auto</button>
+        <button data-value="light">Light</button>
+        <button data-value="dark">Dark</button>
+      </div>
+    </div>
+
+    <div class="card tb-menu" id="tb-menu" hidden></div>
+
+    <input type="file" id="file-input" accept=".obj,.stl" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

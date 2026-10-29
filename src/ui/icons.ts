@@ -1,0 +1,43 @@
+const svg = (body: string) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+
+const dot = (cx: number, cy: number, r = 1.4) => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="currentColor"/>`;
+
+export const ICONS: Record<string, string> = {
+  open: svg('<path d="M3 18V6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v2"/><path d="M3 18 5.6 11.6a1 1 0 0 1 .9-.6H21l-2.7 6.4a1 1 0 0 1-.9.6Z"/>'),
+  exportObj: svg('<path d="M12 3 4 7.5v9L12 21l8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>'),
+  export: svg('<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/>'),
+  plane: svg(`<path d="M2.5 17 7.5 7h14l-5 10Z"/>${dot(8.5, 13.5)}${dot(12.5, 9.5)}${dot(15.5, 14)}`),
+  straighten: svg(`<path d="M4 17 19 8" stroke-dasharray="2 2.4" opacity=".6"/><path d="M4 17h16"/>${dot(4, 17, 1.7)}${dot(20, 17, 1.7)}<path d="M16 6.5a6 6 0 0 1 3.5 6"/><path d="m21 10.6-1.5 2-1.9-1.6"/>`),
+  origin: svg('<path d="M5 19V6"/><path d="m3 8 2-2.5L7 8"/><path d="M5 19h13"/><path d="m16 17 2.5 2-2.5 2"/><circle cx="5" cy="19" r="2" fill="currentColor"/>'),
+  flip: svg('<path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M18 3v4h-4"/><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M6 21v-4h4"/>'),
+  point: svg(`${dot(12, 12, 2.2)}<path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4"/>`),
+  line: svg('<path d="M6 18 18 6"/><rect x="3" y="16" width="4" height="4" rx=".6"/><rect x="17" y="4" width="4" height="4" rx=".6"/>'),
+  circleCenter: svg(`<circle cx="12" cy="12" r="7.5"/>${dot(12, 12, 1.6)}<path d="M12 12 17.3 6.7"/>`),
+  circle3: svg(`<circle cx="12" cy="12" r="7.5"/>${dot(12, 4.5, 1.6)}${dot(5.5, 15.8, 1.6)}${dot(18.5, 15.8, 1.6)}`),
+  rect: svg(`<rect x="4" y="6" width="16" height="12" rx=".5"/>${dot(4, 6, 1.5)}${dot(20, 18, 1.5)}`),
+  rectCenter: svg(`<rect x="4" y="6" width="16" height="12" rx=".5"/>${dot(12, 12, 1.5)}<path d="M12 12 20 18" stroke-dasharray="1.5 1.8"/>`),
+  spline: svg(`<path d="M3 17c3-9 6-9 9-5s6 4 9-5"/>${dot(3, 17)}${dot(12, 12)}${dot(21, 7)}`),
+  trim: svg('<path d="M4 12h6" /><path d="M14 12h6" stroke-dasharray="1.6 2.2"/><path d="M12 4v16"/><circle cx="17" cy="6" r="2"/><circle cx="17" cy="18" r="2"/><path d="m15.5 7.4-3.5 3.6M15.5 16.6 12 13"/>'),
+  extend: svg('<path d="M3 12h9"/><path d="M12 12h5" stroke-dasharray="1.6 2.2"/><path d="m14 9 3 3-3 3"/><path d="M20 4v16"/>'),
+  dimension: svg('<path d="M4 8v8M20 8v8"/><path d="M4 12h16"/><path d="m7 9.5-3 2.5 3 2.5M17 9.5l3 2.5-3 2.5"/>'),
+  hv: svg('<path d="M4 7h11"/><path d="M19 4v16"/>'),
+  perpendicular: svg('<path d="M4 20h16"/><path d="M10 20V4"/><path d="M10 15h5v5"/>'),
+  parallel: svg('<path d="M5 18 15 4"/><path d="M10 20 20 6"/>'),
+  coincident: svg('<path d="M3 17 21 9"/><circle cx="12" cy="13" r="2.6" fill="currentColor"/>'),
+  sketch2d: svg('<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16" stroke-width="1" opacity=".5"/>'),
+  fit: svg('<path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/>'),
+  undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>'),
+  redo: svg('<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>'),
+  settings: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
+  orbit: svg('<ellipse cx="12" cy="12" rx="9" ry="4.2" transform="rotate(-20 12 12)"/><circle cx="12" cy="12" r="2.4"/>'),
+  pan: svg('<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>'),
+  home: svg('<path d="M4 11 12 4l8 7"/><path d="M6.5 9.5V20h11V9.5"/>'),
+  rollCw: svg('<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M18 2.5V7h-4.5"/>'),
+  rollCcw: svg('<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M6 2.5V7h4.5"/>'),
+  chevron: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="m2.5 3.8 2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  triUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7 18 16H6Z" fill="currentColor"/></svg>',
+  triDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17 6 8h12Z" fill="currentColor"/></svg>',
+  triLeft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 12 16 6v12Z" fill="currentColor"/></svg>',
+  triRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 12 8 18V6Z" fill="currentColor"/></svg>',
+};
