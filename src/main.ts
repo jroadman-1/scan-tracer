@@ -20,7 +20,7 @@ import { ExtendTool, TrimTool } from './tools/modifyTools';
 import { OriginTool } from './tools/OriginTool';
 import { PlaneTool } from './tools/PlaneTool';
 import {
-  CenterCircleTool, CenterRectTool, CircleTool, CornerRectTool, LineTool, PointTool, SplineTool,
+  CenterCircleTool, CenterRectTool, CircleTool, CornerRectTool, FilletTool, LineTool, PointTool, SplineTool,
 } from './tools/sketchTools';
 import { StraightenTool } from './tools/StraightenTool';
 import type { Tool, ToolContext } from './tools/Tool';
@@ -157,7 +157,7 @@ async function openFile(file: File) {
     sketchView.attach(viewer.mesh!);
     session.reset();
     hasScan = true;
-    for (const id of ['btn-export', 'caret-export', 'btn-plane', 'btn-straighten', 'btn-flip', 'btn-origin', 'btn-2d', 'btn-point', 'btn-line', 'btn-rect', 'caret-rect', 'btn-circle', 'caret-circle', 'btn-spline', 'btn-trim', 'btn-extend',
+    for (const id of ['btn-export', 'caret-export', 'btn-plane', 'btn-straighten', 'btn-flip', 'btn-origin', 'btn-2d', 'btn-point', 'btn-line', 'btn-rect', 'caret-rect', 'btn-circle', 'caret-circle', 'btn-spline', 'btn-trim', 'btn-fillet', 'btn-extend',
       'btn-dim', 'btn-hv', 'btn-perp', 'btn-parallel', 'btn-coincident']) {
       $<HTMLButtonElement>(id).disabled = false;
     }
@@ -361,6 +361,7 @@ const toolButtons: Record<string, string> = {
   circle: 'btn-circle',
   spline: 'btn-spline',
   trim: 'btn-trim',
+  fillet: 'btn-fillet',
   extend: 'btn-extend',
   dimension: 'btn-dim',
   export: 'btn-export',
@@ -420,6 +421,7 @@ const sketchTools = {
   circle: (ctx: ToolContext) => new CircleTool(ctx),
   spline: (ctx: ToolContext) => new SplineTool(ctx),
   trim: (ctx: ToolContext) => new TrimTool(ctx),
+  fillet: (ctx: ToolContext) => new FilletTool(ctx),
   extend: (ctx: ToolContext) => new ExtendTool(ctx),
 };
 $('btn-point').addEventListener('click', () => startTool(sketchTools.point));
@@ -503,6 +505,7 @@ document.addEventListener('pointerdown', (e) => {
 });
 $('btn-spline').addEventListener('click', () => startTool(sketchTools.spline));
 $('btn-trim').addEventListener('click', () => startTool(sketchTools.trim));
+$('btn-fillet').addEventListener('click', () => startTool(sketchTools.fillet));
 $('btn-extend').addEventListener('click', () => startTool(sketchTools.extend));
 const dimensionTool = (ctx: ToolContext) => new DimensionTool(ctx, (id) => dimView.edit(id));
 const exportTool = (ctx: ToolContext) => new ExportTool(ctx, scanStats?.name ?? 'sketch');

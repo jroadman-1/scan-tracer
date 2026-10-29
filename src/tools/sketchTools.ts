@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { units } from '../app/units';
-import { planeAxesLocal, toScreen } from '../sketch/planePoint';
+import { planeAxesLocal, planePointAt, toScreen } from '../sketch/planePoint';
 import type { SnapContext, SnapResult } from '../sketch/Snap';
 import { rectCorners, type RectShape } from '../sketch/rect';
 import {
-  circlePoints, circleThrough, splinePoints, type DimensionKind, type Entity, type EntityKind, type NewEntity,
+  arcPoints, circlePoints, circleThrough, splinePoints, type DimensionKind, type Entity, type EntityKind, type NewEntity,
 } from '../sketch/Sketch';
 import type { PanelButton } from '../ui/CommandPanel';
 import type { HudField } from '../ui/Hud';
@@ -752,4 +752,204 @@ export class CenterRectTool extends RectTool {
   readonly id = 'centerRect';
   protected readonly centered = true;
   protected readonly title = 'Center Rectangle';
+}
+
+/** A corner where two lines share an end. `e1`/`e2` say which end of each line is at the corner. */
+interface Corner {
+  c: THREE.Vector3;
+  l1: Entity;
+  l2: Entity;
+  e1: 0 | 1;
+  e2: 0 | 1;
+}
+
+// How close (pixels) the cursor must be to a corner to pick it.
+const CORNER_PX = 14;
+
+/**
+ * Fusion-style Fillet: click a corner where two lines meet, then size the
+ * round with the mouse or type a radius. The lines are trimmed back and a
+ * tangent arc joins them. The radius is remembered, so further corners take
+ * one click each.
+ */
+export class FilletTool extends SketchTool {
+  readonly id = 'fillet';
+  private static lastRadius: number | null = null;
+  /** The corner being sized (after the first click when no radius is remembered yet). */
+  private corner: Corner | null = null;
+  private hover: Corner | null = null;
+
+  move(e: PointerEvent) {
+    this.cursorScreen = { x: e.clientX, y: e.clientY };
+    this.cursor = planePointAt(this.ctx.viewer, this.plane, e.clientX, e.clientY);
+    if (!this.corner) this.hover = this.cornerAt(e.clientX, e.clientY);
+    this.refresh();
+  }
+
+  click(_hit: Hit | null, e: PointerEvent) {
+    this.cursorScreen = { x: e.clientX, y: e.clientY };
+    this.cursor = planePointAt(this.ctx.viewer, this.plane, e.clientX, e.clientY);
+    if (this.corner) {
+      this.apply(this.corner, this.radiusFor(this.corner));
+      this.corner = null;
+    } else {
+      const picked = this.cornerAt(e.clientX, e.clientY);
+      if (!picked) return;
+      const typed = this.ctx.hud.get('radius');
+      if (typed !== undefined || FilletTool.lastRadius !== null) {
+        this.apply(picked, typed ?? FilletTool.lastRadius!);
+      } else {
+        this.corner = picked; // first fillet: size it with the mouse
+      }
+    }
+    this.ctx.hud.reset();
+    this.hover = this.cornerAt(e.clientX, e.clientY);
+    this.refresh();
+  }
+
+  typedCommit() {
+    const target = this.corner ?? this.hover;
+    if (target) this.apply(target, this.radiusFor(target));
+    this.corner = null;
+    this.ctx.hud.reset();
+    this.refresh();
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if (e.key === 'Escape' && this.corner) {
+      this.corner = null;
+      this.refresh();
+      return true;
+    }
+    return false;
+  }
+
+  protected place() {}
+
+  protected fields(): HudField[] {
+    const target = this.corner ?? this.hover;
+    if (!target || (!this.corner && FilletTool.lastRadius === null)) return [];
+    return [{ key: 'radius', label: 'Radius', live: this.radiusFor(target, false), kind: 'length' }];
+  }
+
+  /** Every corner where exactly two lines on this plane meet at an angle. */
+  private corners(): Corner[] {
+    const lines = this.ctx.sketch.entities.filter((e) => e.kind === 'line' && e.plane === this.plane);
+    const out: Corner[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      for (let j = i + 1; j < lines.length; j++) {
+        for (const e1 of [0, 1] as const) {
+          for (const e2 of [0, 1] as const) {
+            const c = lines[i].pts[e1];
+            if (c.distanceTo(lines[j].pts[e2]) > 1e-6) continue;
+            const u1 = lines[i].pts[1 - e1].clone().sub(c).normalize();
+            const u2 = lines[j].pts[1 - e2].clone().sub(c).normalize();
+            if (Math.abs(u1.dot(u2)) > 0.9995) continue; // straight through: no corner
+            out.push({ c, l1: lines[i], l2: lines[j], e1, e2 });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  private cornerAt(x: number, y: number): Corner | null {
+    let best: Corner | null = null;
+    let bestD = CORNER_PX;
+    for (const corner of this.corners()) {
+      const s = toScreen(this.ctx.viewer, corner.c);
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = corner;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * The radius to use: typed, else (while sizing) the round that passes
+   * where the cursor is along the corner's bisector, else the remembered one.
+   */
+  private radiusFor(corner: Corner, useTyped = true): number {
+    const typed = this.ctx.hud.get('radius');
+    if (useTyped && typed !== undefined) return typed;
+    if (this.corner === corner && this.cursor) {
+      const { bisector, half } = this.angles(corner);
+      const d = Math.max(0, this.cursor.clone().sub(corner.c).dot(bisector));
+      const s = Math.sin(half);
+      return (d * s) / (1 - s);
+    }
+    return FilletTool.lastRadius ?? 0;
+  }
+
+  private angles(corner: Corner) {
+    const u1 = corner.l1.pts[1 - corner.e1].clone().sub(corner.c).normalize();
+    const u2 = corner.l2.pts[1 - corner.e2].clone().sub(corner.c).normalize();
+    return { u1, u2, bisector: u1.clone().add(u2).normalize(), half: Math.acos(THREE.MathUtils.clamp(u1.dot(u2), -1, 1)) / 2 };
+  }
+
+  /** Where the round meets each line, and a point in the middle of the arc; null if it doesn't fit. */
+  private geometry(corner: Corner, r: number) {
+    if (!(r > 1e-6)) return null;
+    const { u1, u2, bisector, half } = this.angles(corner);
+    const along = r / Math.tan(half);
+    const len1 = corner.l1.pts[0].distanceTo(corner.l1.pts[1]);
+    const len2 = corner.l2.pts[0].distanceTo(corner.l2.pts[1]);
+    if (along > len1 + 1e-6 || along > len2 + 1e-6) return null;
+    return {
+      t1: corner.c.clone().addScaledVector(u1, along),
+      t2: corner.c.clone().addScaledVector(u2, along),
+      mid: corner.c.clone().addScaledVector(bisector, r / Math.sin(half) - r),
+    };
+  }
+
+  private apply(corner: Corner, r: number) {
+    const g = this.geometry(corner, r);
+    if (!g) {
+      this.ctx.notify(r > 0 ? 'That radius is too big for this corner: the lines are too short.' : 'Move away from the corner (or type a radius) to size the fillet.');
+      return;
+    }
+    const typed = this.ctx.hud.get('radius') !== undefined;
+    this.ctx.session.editSketch('Fillet', () => {
+      corner.l1.pts[corner.e1].copy(g.t1);
+      corner.l2.pts[corner.e2].copy(g.t2);
+      const arc = this.ctx.sketch.add({
+        kind: 'arc',
+        plane: this.plane,
+        pts: [g.t1.clone(), g.mid, g.t2.clone()],
+        construction: (corner.l1.construction && corner.l2.construction) || undefined,
+      });
+      if (typed) this.ctx.sketch.addDim('radius', arc.id);
+      this.ctx.sketch.touch();
+    });
+    FilletTool.lastRadius = r;
+  }
+
+  protected refresh() {
+    const target = this.corner ?? this.hover;
+    const preview: THREE.Vector3[][] = [];
+    const dots: THREE.Vector3[] = [];
+    if (target) {
+      dots.push(target.c);
+      const g = this.geometry(target, this.radiusFor(target));
+      if (g && (this.corner || FilletTool.lastRadius !== null || this.ctx.hud.get('radius') !== undefined)) {
+        const pts = arcPoints(g.t1, g.mid, g.t2);
+        if (pts) preview.push(pts);
+      }
+    }
+    this.label(null);
+    const r = FilletTool.lastRadius;
+    this.show(
+      'Fillet',
+      'Click a corner where two lines meet, then move to size the round or type a radius. Further corners take one click and reuse the radius.',
+      preview,
+      dots,
+      this.corner
+        ? 'Fillet: move to size the round or type a radius · click or Enter to apply · Esc to pick another corner'
+        : r !== null
+          ? `Fillet: click a corner to round it (R ${units.fmt(r)}) · type a number for a new radius · Esc when done`
+          : 'Fillet: click a corner where two lines meet · Esc when done',
+    );
+  }
 }

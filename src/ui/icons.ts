@@ -19,6 +19,7 @@ export const ICONS: Record<string, string> = {
   rectCenter: svg(`<rect x="4" y="6" width="16" height="12" rx=".5"/>${dot(12, 12, 1.5)}<path d="M12 12 20 18" stroke-dasharray="1.5 1.8"/>`),
   spline: svg(`<path d="M3 17c3-9 6-9 9-5s6 4 9-5"/>${dot(3, 17)}${dot(12, 12)}${dot(21, 7)}`),
   trim: svg('<path d="M4 12h6" /><path d="M14 12h6" stroke-dasharray="1.6 2.2"/><path d="M12 4v16"/><circle cx="17" cy="6" r="2"/><circle cx="17" cy="18" r="2"/><path d="m15.5 7.4-3.5 3.6M15.5 16.6 12 13"/>'),
+  fillet: svg('<path d="M5 20V12a7 7 0 0 1 7-7h8"/><path d="M5 5v3M5 5h3" opacity=".45" stroke-dasharray="1.4 1.8"/>'),
   extend: svg('<path d="M3 12h9"/><path d="M12 12h5" stroke-dasharray="1.6 2.2"/><path d="m14 9 3 3-3 3"/><path d="M20 4v16"/>'),
   dimension: svg('<path d="M4 8v8M20 8v8"/><path d="M4 12h16"/><path d="m7 9.5-3 2.5 3 2.5M17 9.5l3 2.5-3 2.5"/>'),
   hv: svg('<path d="M4 7h11"/><path d="M19 4v16"/>'),
