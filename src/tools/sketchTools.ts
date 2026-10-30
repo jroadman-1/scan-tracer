@@ -1,11 +1,14 @@
 import * as THREE from 'three';
+import { PLANES } from '../app/alignMath';
 import { units } from '../app/units';
 import { planeAxesLocal, planePointAt, toScreen } from '../sketch/planePoint';
 import type { SnapContext, SnapResult } from '../sketch/Snap';
 import { rectCorners, type RectShape } from '../sketch/rect';
 import {
-  arcPoints, circlePoints, circleThrough, splinePoints, type DimensionKind, type Entity, type EntityKind, type NewEntity,
+  arcPoints, circlePoints, circleThrough, entityPolyline, splinePoints,
+  type DimensionKind, type Entity, type EntityKind, type NewEntity, type Sketch,
 } from '../sketch/Sketch';
+import type { Viewer } from '../viewer/Viewer';
 import type { PanelButton } from '../ui/CommandPanel';
 import type { HudField } from '../ui/Hud';
 import type { Hit } from '../viewer/Viewer';
@@ -950,6 +953,170 @@ export class FilletTool extends SketchTool {
         : r !== null
           ? `Fillet: click a corner to round it (R ${units.fmt(r)}) · type a number for a new radius · Esc when done`
           : 'Fillet: click a corner where two lines meet · Esc when done',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Copy and paste
+
+/**
+ * Copied shapes in flat sketch-plane coordinates (X right, Y up), so they can
+ * be pasted onto any plane and survive re-aligning the scan in between.
+ */
+export interface Clipboard {
+  entities: { id: number; shape: Omit<Entity, 'id' | 'plane' | 'pts' | 'tangents'>; pts: THREE.Vector2[]; tangents?: { start?: THREE.Vector2; end?: THREE.Vector2 } }[];
+  dims: { kind: DimensionKind; entity: number }[];
+  /** Middle of the copied shapes: the point that follows the cursor when pasting. */
+  center: THREE.Vector2;
+}
+
+/** The selected shapes and their dimensions, or null if nothing is selected. */
+export function copySelection(sketch: Sketch, viewer: Viewer): Clipboard | null {
+  const mesh = viewer.mesh;
+  const chosen = [...sketch.selection].map((id) => sketch.get(id)).filter((e): e is Entity => !!e);
+  if (!mesh || !chosen.length) return null;
+  const ids = new Set(chosen.map((e) => e.id));
+  const box = new THREE.Box2();
+  const entities = chosen.map((e) => {
+    const { right, up } = PLANES[e.plane];
+    const flat = (p: THREE.Vector3) => {
+      const w = p.clone().applyMatrix4(mesh.matrixWorld);
+      return new THREE.Vector2(w.dot(right), w.dot(up));
+    };
+    const dir = (d?: THREE.Vector3) => {
+      if (!d) return undefined;
+      const w = d.clone().transformDirection(mesh.matrixWorld);
+      return new THREE.Vector2(w.dot(right), w.dot(up));
+    };
+    for (const p of entityPolyline(e)) box.expandByPoint(flat(p));
+    const { id, kind, closed, rect, construction } = e;
+    // A center stays locked to its centerline only if the centerline comes along.
+    const centerOn = e.centerOn !== undefined && ids.has(e.centerOn) ? e.centerOn : undefined;
+    return {
+      id,
+      shape: { kind, closed, rect: rect && { ...rect }, construction, centerOn },
+      pts: e.pts.map(flat),
+      tangents: e.tangents && { start: dir(e.tangents.start), end: dir(e.tangents.end) },
+    };
+  });
+  const dims = sketch.dims.filter((d) => ids.has(d.entity)).map(({ kind, entity }) => ({ kind, entity }));
+  return { entities, dims, center: box.getCenter(new THREE.Vector2()) };
+}
+
+/** Places a copy of the clipboard: it follows the cursor (and snaps) until you click. R turns it, M mirrors it. */
+export class PasteTool extends SketchTool {
+  readonly id = 'paste';
+  private turns = 0;
+  private mirrored = false;
+  private placedOnce = false;
+
+  constructor(ctx: ToolContext, private readonly clip: Clipboard) {
+    super(ctx);
+  }
+
+  start() {
+    super.start();
+    if (!this.cursor) {
+      // Start at the view's center so the copy is visible before the mouse moves.
+      const r = this.ctx.viewer.canvas.getBoundingClientRect();
+      this.cursorScreen = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      this.cursor = planePointAt(this.ctx.viewer, this.plane, this.cursorScreen.x, this.cursorScreen.y);
+      this.refresh();
+    }
+  }
+
+  key(e: KeyboardEvent): boolean {
+    const k = e.key.toLowerCase();
+    if (k === 'r') this.turn();
+    else if (k === 'm') this.mirror();
+    else return false;
+    return true;
+  }
+
+  private turn() {
+    this.turns = (this.turns + 1) % 4;
+    this.refresh();
+  }
+
+  private mirror() {
+    this.mirrored = !this.mirrored;
+    this.refresh();
+  }
+
+  /** Enter or Done places the copy where it is. */
+  commit() {
+    if (this.cursor) this.place(this.cursor);
+    else this.finish();
+  }
+
+  /** The copied shapes moved so their center sits at `at`, on the current plane. */
+  private placed(at: THREE.Vector3): NewEntity[] {
+    const { right, up } = planeAxesLocal(this.ctx.viewer, this.plane);
+    const origin = this.ctx.viewer.mesh!.worldToLocal(new THREE.Vector3());
+    const rel = at.clone().sub(origin);
+    const target = new THREE.Vector2(rel.dot(right), rel.dot(up));
+    const cos = [1, 0, -1, 0][this.turns], sin = [0, 1, 0, -1][this.turns];
+    const orient = (v: THREE.Vector2) => {
+      const x = this.mirrored ? -v.x : v.x;
+      return new THREE.Vector2(x * cos - v.y * sin, x * sin + v.y * cos);
+    };
+    const toLocal = (v: THREE.Vector2) => origin.clone().addScaledVector(right, v.x).addScaledVector(up, v.y);
+    const point = (v: THREE.Vector2) => toLocal(orient(v.clone().sub(this.clip.center)).add(target));
+    const dir = (v?: THREE.Vector2) => {
+      if (!v) return undefined;
+      const o = orient(v);
+      return right.clone().multiplyScalar(o.x).addScaledVector(up, o.y).normalize();
+    };
+    return this.clip.entities.map((c) => ({
+      ...c.shape,
+      rect: c.shape.rect && { ...c.shape.rect },
+      plane: this.plane,
+      pts: c.pts.map(point),
+      tangents: c.tangents && { start: dir(c.tangents.start), end: dir(c.tangents.end) },
+    }));
+  }
+
+  protected place(p: THREE.Vector3) {
+    const shapes = this.placed(p);
+    const { sketch } = this.ctx;
+    const n = shapes.length;
+    this.ctx.session.editSketch(n > 1 ? `Paste ${n} items` : 'Paste', () => {
+      const newId = new Map<number, number>();
+      const added = shapes.map((s, i) => {
+        const e = sketch.add(s);
+        newId.set(this.clip.entities[i].id, e.id);
+        return e;
+      });
+      // Rectangle groups and centerline locks refer to entity ids: point them at the copies.
+      for (const e of added) {
+        if (e.rect) e.rect.group = newId.get(e.rect.group) ?? e.id;
+        if (e.centerOn !== undefined) e.centerOn = newId.get(e.centerOn);
+      }
+      for (const d of this.clip.dims) sketch.addDim(d.kind, newId.get(d.entity)!);
+      sketch.touch();
+      sketch.setSelection(added.map((e) => e.id));
+    });
+    this.placedOnce = true;
+    this.finish();
+  }
+
+  protected refresh() {
+    if (this.placedOnce) return;
+    const shapes = this.cursor ? this.placed(this.cursor) : [];
+    const n = this.clip.entities.length;
+    const turn = this.turns ? ` · turned ${this.turns * 90}°` : '';
+    this.label(null);
+    this.showWith(
+      'Paste',
+      'Move the copy into place and click. Its center snaps like a drawing tool. R turns it 90°, M mirrors it.',
+      shapes.map((s) => entityPolyline({ ...s, id: -1 })),
+      this.cursor ? [this.cursor] : [],
+      `Paste ${n > 1 ? `${n} items` : this.clip.entities[0].shape.kind}: click to place${turn}${this.mirrored ? ' · mirrored' : ''} · R turn 90° · M mirror · Esc to cancel`,
+      [[
+        { label: 'Turn 90°', title: 'Rotate the copy a quarter turn (R)', onClick: () => this.turn() },
+        { label: 'Mirror', title: 'Flip the copy left to right (M)', on: this.mirrored, onClick: () => this.mirror() },
+      ]],
     );
   }
 }

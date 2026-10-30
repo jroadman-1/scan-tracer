@@ -20,7 +20,8 @@ import { ExtendTool, TrimTool } from './tools/modifyTools';
 import { OriginTool } from './tools/OriginTool';
 import { PlaneTool } from './tools/PlaneTool';
 import {
-  CenterCircleTool, CenterRectTool, CircleTool, CornerRectTool, FilletTool, LineTool, PointTool, SplineTool,
+  CenterCircleTool, CenterRectTool, CircleTool, copySelection, CornerRectTool, FilletTool, LineTool, PasteTool, PointTool,
+  SplineTool, type Clipboard,
 } from './tools/sketchTools';
 import { StraightenTool } from './tools/StraightenTool';
 import type { Tool, ToolContext } from './tools/Tool';
@@ -95,7 +96,7 @@ function updatePrompt(tool: NavTool = nav.tool) {
   else if (selected.length === 1 && selected[0]?.kind === 'spline') {
     prompt.textContent = 'Spline: drag points to reshape · double-click the curve to add a point, or a point to remove it · Delete removes the spline';
   } else if (selected.length) {
-    prompt.textContent = 'Drag a point or a line to move it · drag a circle edge to resize · Delete removes the selection · Esc clears it';
+    prompt.textContent = 'Drag a point or a line to move it · drag a circle edge to resize · ⌘C copy · Delete removes the selection · Esc clears it';
   }
   else if (session.view2d) prompt.textContent = `2D ${PLANES[session.view2d].label} view: swipe to pan, pinch to zoom · Exit 2D returns to 3D`;
   else if (tool === 'orbit') prompt.textContent = 'Orbit: drag to orbit · Esc to exit';
@@ -380,7 +381,7 @@ function startTool(make: (ctx: ToolContext) => Tool) {
   activeTool = tool;
   nav.setPicking(tool.picks);
   showVariant(tool.id);
-  $(toolButtons[tool.id]).classList.add('active');
+  if (toolButtons[tool.id]) $(toolButtons[tool.id]).classList.add('active');
   tool.start();
 }
 
@@ -390,7 +391,7 @@ function endTool(cancel: boolean) {
   if (!tool) return;
   activeTool = null; // cleared first: cancel() calls back into done()
   if (cancel) tool.cancel();
-  $(toolButtons[tool.id]).classList.remove('active');
+  if (toolButtons[tool.id]) $(toolButtons[tool.id]).classList.remove('active');
   nav.setPicking(false);
   panel.hide();
   viewer.setMarkers([]);
@@ -635,6 +636,19 @@ session.onChange = () => {
 
 // --- Keyboard ------------------------------------------------------------------------
 
+let clipboard: Clipboard | null = null;
+
+/** Copies the selected shapes; false if nothing is selected. */
+function copy(): boolean {
+  if (activeTool) return false;
+  const clip = copySelection(sketch, viewer);
+  if (!clip) return false;
+  clipboard = clip;
+  const n = clip.entities.length;
+  prompt.textContent = `Copied ${n > 1 ? `${n} items` : clip.entities[0].shape.kind} · ⌘V to paste`;
+  return true;
+}
+
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement;
   if (target.matches('input, select, textarea')) return;
@@ -644,6 +658,14 @@ window.addEventListener('keydown', (e) => {
     else if (k === 'e' && hasScan) { e.preventDefault(); exportDxf(); }
     else if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
     else if (k === 'z') { e.preventDefault(); undo(); }
+    else if (k === 'c' && copy()) e.preventDefault();
+    else if (k === 'x' && copy()) { e.preventDefault(); if (!activeTool) editor.deleteSelection(); }
+    else if (k === 'v' && hasScan && clipboard) { e.preventDefault(); startTool((ctx) => new PasteTool(ctx, clipboard!)); }
+    else if (k === 'a' && hasScan && !activeTool) {
+      // Select everything drawn on the plane being viewed (or all of it in 3D).
+      e.preventDefault();
+      sketch.setSelection(sketch.entities.filter((ent) => !session.view2d || ent.plane === session.view2d).map((ent) => ent.id));
+    }
     return;
   }
   if (e.altKey) return;

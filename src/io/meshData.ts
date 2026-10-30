@@ -171,6 +171,192 @@ export function parseSTL(b: Uint8Array, onProgress: ProgressFn): RawMesh {
   return weld(raw.slice(0, rc - (rc % 9)), (f) => onProgress(0.5 + 0.5 * f));
 }
 
+// ---------------------------------------------------------------------------
+// PLY (ASCII and binary, either byte order). Scanners often add colors,
+// normals or confidence values per vertex; only positions and faces are read.
+
+type PlyRead = (dv: DataView, o: number, le: boolean) => number;
+const PLY_TYPES: Record<string, [size: number, read: PlyRead]> = {
+  int8: [1, (d, o) => d.getInt8(o)],
+  uint8: [1, (d, o) => d.getUint8(o)],
+  int16: [2, (d, o, le) => d.getInt16(o, le)],
+  uint16: [2, (d, o, le) => d.getUint16(o, le)],
+  int32: [4, (d, o, le) => d.getInt32(o, le)],
+  uint32: [4, (d, o, le) => d.getUint32(o, le)],
+  float32: [4, (d, o, le) => d.getFloat32(o, le)],
+  float64: [8, (d, o, le) => d.getFloat64(o, le)],
+};
+const PLY_ALIASES: Record<string, string> = {
+  char: 'int8', uchar: 'uint8', short: 'int16', ushort: 'uint16',
+  int: 'int32', uint: 'uint32', float: 'float32', double: 'float64',
+};
+
+interface PlyProperty { name: string; type: string; countType?: string }
+interface PlyElement { name: string; count: number; props: PlyProperty[] }
+
+function plyType(name: string): string {
+  const t = PLY_ALIASES[name] ?? name;
+  if (!PLY_TYPES[t]) throw new Error(`This PLY file uses an unknown value type "${name}".`);
+  return t;
+}
+
+function readPlyHeader(b: Uint8Array): { format: string; elements: PlyElement[]; start: number } {
+  const text = new TextDecoder('latin1').decode(b.subarray(0, Math.min(b.length, 1 << 16)));
+  if (!/^ply\r?\n/.test(text)) throw new Error('This is not a PLY file (the "ply" header is missing).');
+  const end = /end_header[ \t]*\r?\n/.exec(text);
+  if (!end) throw new Error('This PLY file has no end_header line.');
+  let format = '';
+  const elements: PlyElement[] = [];
+  for (const line of text.slice(0, end.index).split(/\r?\n/)) {
+    const w = line.trim().split(/\s+/);
+    if (w[0] === 'format') format = w[1];
+    else if (w[0] === 'element') elements.push({ name: w[1], count: parseInt(w[2], 10) || 0, props: [] });
+    else if (w[0] === 'property' && elements.length) {
+      const props = elements[elements.length - 1].props;
+      if (w[1] === 'list') props.push({ name: w[4], type: plyType(w[3]), countType: plyType(w[2]) });
+      else props.push({ name: w[2], type: plyType(w[1]) });
+    }
+  }
+  return { format, elements, start: end.index + end[0].length };
+}
+
+export function parsePLY(b: Uint8Array, onProgress: ProgressFn): RawMesh {
+  const { format, elements, start } = readPlyHeader(b);
+  const vertex = elements.find((e) => e.name === 'vertex');
+  if (!vertex || vertex.count === 0) throw new Error('This PLY file has no vertices.');
+  const axes = ['x', 'y', 'z'].map((n) => vertex.props.findIndex((p) => p.name === n && !p.countType));
+  if (axes.includes(-1)) throw new Error('This PLY file has no x, y, z vertex positions.');
+
+  const pos = new Float32Array(vertex.count * 3);
+  let idx = new Uint32Array(Math.max(1024, vertex.count * 6));
+  let ic = 0;
+  const poly: number[] = [];
+  const addFace = () => {
+    if (poly.length < 3) return;
+    const need = ic + (poly.length - 2) * 3;
+    if (need > idx.length) idx = grow(idx, need);
+    for (let k = 1; k < poly.length - 1; k++) {
+      idx[ic++] = poly[0];
+      idx[ic++] = poly[k];
+      idx[ic++] = poly[k + 1];
+    }
+  };
+  const faceList = (el: PlyElement) => {
+    if (el.name !== 'face') return -1;
+    const named = el.props.findIndex((p) => p.countType && (p.name === 'vertex_indices' || p.name === 'vertex_index'));
+    return named >= 0 ? named : el.props.findIndex((p) => p.countType);
+  };
+  const truncated = () => new Error('This PLY file ends early; it may be incomplete.');
+  const total = elements.reduce((s, e) => s + e.count, 0);
+  let done = 0;
+
+  if (format === 'ascii') {
+    const n = b.length;
+    cur = start;
+    for (const el of elements) {
+      const fi = faceList(el);
+      for (let i = 0; i < el.count; i++) {
+        if (cur >= n) throw truncated();
+        for (let k = 0; k < el.props.length; k++) {
+          if (el.props[k].countType) {
+            const m = readFloat(b);
+            if (k === fi) {
+              poly.length = 0;
+              for (let j = 0; j < m; j++) poly.push(readFloat(b));
+              addFace();
+            } else for (let j = 0; j < m; j++) readFloat(b);
+          } else {
+            const v = readFloat(b);
+            const a = el === vertex ? axes.indexOf(k) : -1;
+            if (a >= 0) pos[i * 3 + a] = v;
+          }
+        }
+        skipToNextLine(b, n);
+        if ((++done & 0xffff) === 0) onProgress(done / total);
+      }
+    }
+  } else {
+    const le = format === 'binary_little_endian';
+    if (!le && format !== 'binary_big_endian') throw new Error(`This PLY file has an unknown format "${format}".`);
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    let o = start;
+    for (const el of elements) {
+      if (el.props.every((p) => !p.countType)) {
+        // Fixed-size records: jump straight to the values needed.
+        const offsets: number[] = [];
+        let stride = 0;
+        for (const p of el.props) { offsets.push(stride); stride += PLY_TYPES[p.type][0]; }
+        if (o + stride * el.count > b.length) throw truncated();
+        if (el === vertex) {
+          const [ox, oy, oz] = axes.map((k) => offsets[k]);
+          const [rx, ry, rz] = axes.map((k) => PLY_TYPES[el.props[k].type][1]);
+          for (let i = 0; i < el.count; i++) {
+            const base = o + i * stride;
+            pos[i * 3] = rx(dv, base + ox, le);
+            pos[i * 3 + 1] = ry(dv, base + oy, le);
+            pos[i * 3 + 2] = rz(dv, base + oz, le);
+            if ((i & 0xfffff) === 0) onProgress((done + i) / total);
+          }
+        }
+        o += stride * el.count;
+        done += el.count;
+        continue;
+      }
+      const fi = faceList(el);
+      for (let i = 0; i < el.count; i++) {
+        for (let k = 0; k < el.props.length; k++) {
+          const p = el.props[k];
+          const [size, read] = PLY_TYPES[p.type];
+          if (p.countType) {
+            const [csize, cread] = PLY_TYPES[p.countType];
+            if (o + csize > b.length) throw truncated();
+            const m = cread(dv, o, le);
+            o += csize;
+            if (o + m * size > b.length) throw truncated();
+            if (k === fi) {
+              poly.length = 0;
+              for (let j = 0; j < m; j++) poly.push(read(dv, o + j * size, le));
+              addFace();
+            }
+            o += m * size;
+          } else {
+            if (o + size > b.length) throw truncated();
+            const a = el === vertex ? axes.indexOf(k) : -1;
+            if (a >= 0) pos[i * 3 + a] = read(dv, o, le);
+            o += size;
+          }
+        }
+        if ((++done & 0xffff) === 0) onProgress(done / total);
+      }
+    }
+  }
+
+  if (ic === 0) {
+    throw new Error('This PLY file is a point cloud (points only, no faces). Turn it into a mesh in your scanner software and export again.');
+  }
+  // Some exporters write every face's corners separately; merge them so the
+  // surface is connected and shades smoothly.
+  if (vertex.count >= ic) {
+    const raw = new Float32Array(ic * 3);
+    for (let i = 0; i < ic; i++) {
+      const v = idx[i];
+      if (v >= vertex.count) continue;
+      raw[i * 3] = pos[v * 3]; raw[i * 3 + 1] = pos[v * 3 + 1]; raw[i * 3 + 2] = pos[v * 3 + 2];
+    }
+    return weld(raw, (f) => onProgress(0.9 + 0.1 * f));
+  }
+  onProgress(1);
+  return { positions: pos, index: dropInvalidTriangles(idx.subarray(0, ic), vertex.count) };
+}
+
+/** The parser for a scan file, chosen by its extension, or null if unsupported. */
+export function parserFor(fileName: string): ((b: Uint8Array, onProgress: ProgressFn) => RawMesh) | null {
+  const ext = fileName.toLowerCase().split('.').pop();
+  return ext === 'obj' ? parseOBJ : ext === 'stl' ? parseSTL : ext === 'ply' ? parsePLY : null;
+}
+
+export const UNSUPPORTED_FILE = 'Unsupported file type. Open an .obj, .stl or .ply scan.';
+
 function weld(raw: Float32Array, onProgress: ProgressFn): RawMesh {
   const count = raw.length / 3;
   const bits = new Uint32Array(raw.buffer, raw.byteOffset, raw.length);

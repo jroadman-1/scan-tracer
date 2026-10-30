@@ -3,7 +3,7 @@
 
 import { BufferAttribute, BufferGeometry } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { computeCurvature, computeNormals, computeVertexLevels, parseOBJ, parseSTL } from './meshData';
+import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE } from './meshData';
 
 interface WorkerScope {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -30,9 +30,8 @@ scope.onmessage = async (e) => {
     } catch (err) {
       throw new Error(`The file could not be read (${err instanceof Error ? err.message : err}).`);
     }
-    const name = file.name.toLowerCase();
-    const parse = name.endsWith('.stl') ? parseSTL : name.endsWith('.obj') ? parseOBJ : null;
-    if (!parse) throw new Error('Unsupported file type. Open an .obj or .stl scan.');
+    const parse = parserFor(file.name);
+    if (!parse) throw new Error(UNSUPPORTED_FILE);
 
     const mesh = parse(bytes, (f) => progress('Reading geometry', 0.03 + 0.6 * f));
     if (mesh.index.length === 0) throw new Error('No triangles were found in this file.');

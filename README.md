@@ -2,7 +2,7 @@
 
 Trace 3D scans into accurate 2D drawings, right in your browser.
 
-Open an OBJ or STL scan, level and square it, draw over it with Fusion-style
+Open an OBJ, STL or PLY scan, level and square it, draw over it with Fusion-style
 sketch tools, and export a DXF (and the aligned scan as an OBJ). Everything runs
 on your own computer: scans are never uploaded.
 
@@ -10,7 +10,7 @@ on your own computer: scans are never uploaded.
 
 ## Workflow
 
-1. **Open** an OBJ or STL scan (units: mm).
+1. **Open** an OBJ, STL or PLY scan (units: mm).
 2. **3-Pt Plane:** click three points on a surface that should lie flat.
 3. **2D View**, then **Straighten** (and **Flip 180°** if needed).
 4. Draw a **centerline** and use **Set Origin** to put X 0, Y 0 where you want it.

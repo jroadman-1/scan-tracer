@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { computeCurvature, computeNormals, computeVertexLevels, parseOBJ, parseSTL } from './meshData';
+import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE } from './meshData';
 
 export interface ScanStats {
   name: string;
@@ -98,9 +98,8 @@ function loadInWorker(file: File, onProgress: Progress): Promise<THREE.BufferGeo
 const nextFrame = () => new Promise((r) => setTimeout(r, 0));
 
 async function loadOnMainThread(file: File, onProgress: Progress): Promise<THREE.BufferGeometry> {
-  const name = file.name.toLowerCase();
-  const parse = name.endsWith('.stl') ? parseSTL : name.endsWith('.obj') ? parseOBJ : null;
-  if (!parse) throw new Error('Unsupported file type. Open an .obj or .stl scan.');
+  const parse = parserFor(file.name);
+  if (!parse) throw new Error(UNSUPPORTED_FILE);
 
   onProgress('Reading file', 0);
   await nextFrame();
