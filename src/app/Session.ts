@@ -21,6 +21,9 @@ export class Session {
   view2d: PlaneName | null = null;
   onChange: () => void = () => {};
 
+  /** Changes with every edit, undo and redo, so callers can tell whether there are unsaved changes. */
+  revision = 0;
+
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private saved3d: { view: ViewState; ortho: boolean } | null = null;
@@ -76,6 +79,7 @@ export class Session {
   }
 
   private push(entry: HistoryEntry) {
+    this.revision++;
     this.undoStack.push(entry);
     this.redoStack = [];
     this.onChange();
@@ -85,6 +89,7 @@ export class Session {
     const entry = this.undoStack.pop();
     if (!entry) return;
     entry.undo();
+    this.revision++;
     this.redoStack.push(entry);
     this.onChange();
   }
@@ -93,6 +98,7 @@ export class Session {
     const entry = this.redoStack.pop();
     if (!entry) return;
     entry.redo();
+    this.revision++;
     this.undoStack.push(entry);
     this.onChange();
   }

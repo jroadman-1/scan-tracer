@@ -5,7 +5,7 @@ import { planeAxesLocal, planePointAt, toScreen } from '../sketch/planePoint';
 import type { SnapContext, SnapResult } from '../sketch/Snap';
 import { rectCorners, type RectShape } from '../sketch/rect';
 import {
-  arcPoints, circlePoints, circleThrough, entityPolyline, splinePoints,
+  arcMidpoint, arcPoints, circlePoints, circleThrough, entityPolyline, splinePoints,
   type DimensionKind, type Entity, type EntityKind, type NewEntity, type Sketch,
 } from '../sketch/Sketch';
 import type { Viewer } from '../viewer/Viewer';
@@ -84,7 +84,7 @@ abstract class SketchTool implements Tool {
   /** Cursor position on the sketch plane after snapping (⌘ turns snapping off). */
   private snapAt(e: PointerEvent): THREE.Vector3 | null {
     this.cursorScreen = { x: e.clientX, y: e.clientY };
-    const s = this.ctx.snapper.snap(e.clientX, e.clientY, { plane: this.plane, ...this.snapContext() }, e.metaKey);
+    const s = this.ctx.snapper.snap(e.clientX, e.clientY, { plane: this.plane, ...this.snapContext(), lock: e.shiftKey }, e.metaKey);
     this.lastSnap = s;
     this.ctx.snapOverlay.show(s);
     return s?.point ?? null;
@@ -332,7 +332,7 @@ export class LineTool extends SketchTool {
       preview,
       this.from ? [this.from] : this.cursor ? [this.cursor] : [],
       this.from
-        ? 'Line: click the next point · double-click, Enter or Esc ends this line · X toggles centerline'
+        ? 'Line: click the next point · Shift locks level/plumb · ⌘ turns off snapping · double-click, Enter or Esc ends this line · X centerline'
         : 'Line: click to start a line · X toggles centerline · Esc when done',
       [[{ label: 'Centerline (construction)', title: 'X', on: this.construction, onClick: () => { this.construction = !this.construction; this.refresh(); } }]],
     );
@@ -451,6 +451,208 @@ export class CircleTool extends SketchTool {
       preview,
       this.pts.length ? this.pts : this.cursor ? [this.cursor] : [],
       `3-Point Circle: click point ${n} of 3 on the edge · Backspace removes the last point · Esc when done`,
+    );
+  }
+}
+
+/** Arc through a start, an end, and a third point that sets how far it bends. Arcs are stored as [start, midpoint, end]. */
+export class ThreePointArcTool extends SketchTool {
+  readonly id = 'arc3';
+  private pts: THREE.Vector3[] = [];
+
+  /** The arc from the two picked ends bending toward `p`: through `p`, or with the typed radius on p's side. */
+  private arcFor(p: THREE.Vector3): THREE.Vector3[] | null {
+    const [a, b] = this.pts;
+    const typed = this.ctx.hud.get('radius');
+    if (typed === undefined) {
+      const mid = arcMidpoint(a, p, b);
+      return mid ? [a, mid, b] : null;
+    }
+    const half = a.distanceTo(b) / 2;
+    if (typed < half) return null;
+    const { right, up } = planeAxesLocal(this.ctx.viewer, this.plane);
+    const chord = b.clone().sub(a).normalize();
+    const across = new THREE.Vector3().crossVectors(new THREE.Vector3().crossVectors(right, up), chord);
+    const middle = a.clone().lerp(b, 0.5);
+    const side = p.clone().sub(middle).dot(across) < 0 ? -1 : 1;
+    // The shorter of the two arcs with this radius, bulging toward the cursor.
+    const rise = typed - Math.sqrt(typed * typed - half * half);
+    return [a, middle.addScaledVector(across, side * rise), b];
+  }
+
+  protected place(p: THREE.Vector3) {
+    if (this.pts.length < 2) {
+      if (!this.pts.length || p.distanceTo(this.pts[0]) > 1e-6) this.pts.push(p);
+      return;
+    }
+    const arc = this.arcFor(p);
+    if (!arc) {
+      this.ctx.notify(
+        this.ctx.hud.get('radius') !== undefined
+          ? 'That radius is too small to reach between the two ends. Type at least half the distance between them.'
+          : 'That point is in line with the two ends. Move it to one side to bend the arc.',
+      );
+      return;
+    }
+    this.add('Arc', 'arc', arc, {}, this.ctx.hud.get('radius') !== undefined ? ['radius'] : []);
+    this.pts = [];
+  }
+
+  protected fields(): HudField[] {
+    if (this.pts.length < 2 || !this.cursor) return [];
+    const c = circleThrough(this.pts[0], this.cursor, this.pts[1]);
+    return [{ key: 'radius', label: 'Radius', live: c?.radius ?? 0, kind: 'length' }];
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if ((e.key === 'Escape' || e.key === 'Backspace' || e.key === 'Delete') && this.pts.length) {
+      if (e.key === 'Escape') this.pts = [];
+      else this.pts.pop();
+      this.refresh();
+      return true;
+    }
+    return false;
+  }
+
+  protected refresh() {
+    const preview: THREE.Vector3[][] = [];
+    this.label(null);
+    if (this.cursor && this.pts.length === 1) {
+      preview.push([this.pts[0], this.cursor]);
+      this.label(units.fmt(this.pts[0].distanceTo(this.cursor)));
+    } else if (this.cursor && this.pts.length === 2) {
+      const arc = this.arcFor(this.cursor);
+      const drawn = arc && arcPoints(arc[0], arc[1], arc[2]);
+      if (drawn) preview.push(drawn);
+      else preview.push([this.pts[0], this.pts[1]]);
+    }
+    const step = ['start', 'end', 'bend'][this.pts.length];
+    this.show(
+      '3-Point Arc',
+      'Click where the arc starts and ends, then move the mouse to bend it and click. Type a radius to set its size.',
+      preview,
+      this.pts.length ? this.pts : this.cursor ? [this.cursor] : [],
+      step === 'bend'
+        ? '3-Point Arc: move to bend the arc, click to finish · type a radius · Backspace removes the last point'
+        : `3-Point Arc: click the ${step} point · Esc when done`,
+    );
+  }
+}
+
+/** Arc around a center: click the center, then the start (setting the radius), then sweep round to the end. */
+export class CenterArcTool extends SketchTool {
+  readonly id = 'centerArc';
+  private center: THREE.Vector3 | null = null;
+  /** Where the arc starts; its distance from the center is the radius. */
+  private from: THREE.Vector3 | null = null;
+  /** Whether the radius was typed, so the finished arc gets a radius dimension. */
+  private startRadiusTyped = false;
+  /** Signed angle swept so far from the start, following the cursor round (counterclockwise is positive). */
+  private sweep = 0;
+  private lastAngle = 0;
+
+  private get normal() {
+    const { right, up } = planeAxesLocal(this.ctx.viewer, this.plane);
+    return new THREE.Vector3().crossVectors(right, up).normalize();
+  }
+
+  private angleAt(p: THREE.Vector3) {
+    return THREE.MathUtils.degToRad(this.angleOf(p.clone().sub(this.center!)));
+  }
+
+  /** Follows the cursor round the center, so the arc can sweep past 180° in either direction. */
+  private track(p: THREE.Vector3) {
+    if (!this.center || !this.from || p.distanceTo(this.center) < 1e-9) return;
+    const a = this.angleAt(p);
+    let d = a - this.lastAngle;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    this.sweep = THREE.MathUtils.clamp(this.sweep + d, -Math.PI * 2, Math.PI * 2);
+    this.lastAngle = a;
+  }
+
+  /** The sweep to draw: a typed angle (in the direction being swept) or the tracked one. */
+  private currentSweep() {
+    const typed = this.ctx.hud.get('angle');
+    if (typed === undefined) return this.sweep;
+    const sign = this.sweep < 0 ? -1 : 1;
+    return sign * THREE.MathUtils.degToRad(Math.min(Math.abs(typed), 359.9));
+  }
+
+  private arc(): THREE.Vector3[] | null {
+    const sweep = THREE.MathUtils.clamp(this.currentSweep(), -Math.PI * 2 + 1e-3, Math.PI * 2 - 1e-3);
+    if (!this.center || !this.from || Math.abs(sweep) < 1e-4) return null;
+    const rel = this.from.clone().sub(this.center);
+    const at = (t: number) => this.center!.clone().add(rel.clone().applyAxisAngle(this.normal, t));
+    return [this.from, at(sweep / 2), at(sweep)];
+  }
+
+  protected place(p: THREE.Vector3) {
+    if (!this.center) {
+      this.center = p;
+      return;
+    }
+    if (!this.from) {
+      const typed = this.ctx.hud.get('radius');
+      const r = typed ?? p.distanceTo(this.center);
+      if (r < 1e-6) return;
+      const dir = p.distanceTo(this.center) > 1e-9 ? p.clone().sub(this.center).normalize() : planeAxesLocal(this.ctx.viewer, this.plane).right;
+      this.from = this.center.clone().addScaledVector(dir, r);
+      this.startRadiusTyped = typed !== undefined;
+      this.sweep = 0;
+      this.lastAngle = this.angleAt(this.from);
+      return;
+    }
+    this.track(p);
+    const arc = this.arc();
+    if (!arc) return;
+    this.add('Arc', 'arc', arc, {}, this.startRadiusTyped ? ['radius'] : []);
+    this.center = this.from = null;
+  }
+
+  protected fields(): HudField[] {
+    if (!this.center || !this.cursor) return [];
+    if (!this.from) return [{ key: 'radius', label: 'Radius', live: this.cursor.distanceTo(this.center), kind: 'length' }];
+    return [{ key: 'angle', label: 'Angle', live: Math.abs(THREE.MathUtils.radToDeg(this.sweep)), kind: 'angle' }];
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if ((e.key === 'Escape' || e.key === 'Backspace' || e.key === 'Delete') && this.center) {
+      if (e.key !== 'Escape' && this.from) this.from = null;
+      else this.center = this.from = null;
+      this.refresh();
+      return true;
+    }
+    return false;
+  }
+
+  protected refresh() {
+    if (this.cursor) this.track(this.cursor);
+    const preview: THREE.Vector3[][] = [];
+    this.label(null);
+    if (this.center && !this.from && this.cursor) {
+      const typed = this.ctx.hud.get('radius');
+      const r = typed ?? this.cursor.distanceTo(this.center);
+      if (r > 1e-6) {
+        preview.push([this.center, this.cursor]);
+        this.label(`R ${units.fmt(r)}`);
+      }
+    } else if (this.center && this.from) {
+      const arc = this.arc();
+      const drawn = arc && arcPoints(arc[0], arc[1], arc[2]);
+      preview.push([this.center, this.from]);
+      if (drawn) preview.push(drawn, [this.center, arc[2]]);
+    }
+    this.show(
+      'Center Point Arc',
+      'Click the center, then where the arc starts, then sweep around to where it ends. Type a radius or an angle to set them exactly.',
+      preview,
+      [this.center, this.from, ...(this.center ? [] : this.cursor ? [this.cursor] : [])].filter((p): p is THREE.Vector3 => !!p),
+      !this.center
+        ? 'Center Point Arc: click the center · Esc when done'
+        : !this.from
+          ? 'Center Point Arc: click where the arc starts (sets the radius) · type a radius · Esc starts over'
+          : 'Center Point Arc: sweep round and click where it ends · type an angle · Backspace picks the start again',
     );
   }
 }

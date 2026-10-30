@@ -254,7 +254,11 @@ export function circlePoints(center: THREE.Vector3, radius: number, normal: THRE
 }
 
 /** Points along the arc from `a` through `m` to `b`, or null if they're in a line. */
-export function arcPoints(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3, segments = 96): THREE.Vector3[] | null {
+/**
+ * The circle an arc lies on, with axes u (toward its start) and v, and its
+ * signed sweep from the start, going the way round that passes through m.
+ */
+export function arcGeometry(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3) {
   const c = circleThrough(a, m, b);
   if (!c) return null;
   const u = a.clone().sub(c.center).normalize();
@@ -264,15 +268,24 @@ export function arcPoints(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3, 
     const t = Math.atan2(d.dot(v), d.dot(u));
     return t < 0 ? t + Math.PI * 2 : t;
   };
-  // Go the way round that passes through m.
   const am = angle(m);
   const ab = angle(b);
   const sweep = am <= ab ? ab : ab - Math.PI * 2;
-  const n = Math.max(8, Math.ceil((segments * Math.abs(sweep)) / (Math.PI * 2)));
-  return Array.from({ length: n + 1 }, (_, i) => {
-    const t = (sweep * i) / n;
-    return c.center.clone().addScaledVector(u, Math.cos(t) * c.radius).addScaledVector(v, Math.sin(t) * c.radius);
-  });
+  const at = (t: number) => c.center.clone().addScaledVector(u, Math.cos(t) * c.radius).addScaledVector(v, Math.sin(t) * c.radius);
+  return { ...c, u, v, sweep, at };
+}
+
+/** The point halfway along the arc from a through `through` to b. */
+export function arcMidpoint(a: THREE.Vector3, through: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 | null {
+  const g = arcGeometry(a, through, b);
+  return g ? g.at(g.sweep / 2) : null;
+}
+
+export function arcPoints(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3, segments = 96): THREE.Vector3[] | null {
+  const g = arcGeometry(a, m, b);
+  if (!g) return null;
+  const n = Math.max(8, Math.ceil((segments * Math.abs(g.sweep)) / (Math.PI * 2)));
+  return Array.from({ length: n + 1 }, (_, i) => g.at((g.sweep * i) / n));
 }
 
 /** Polyline drawn for an entity (a single point for point entities). */

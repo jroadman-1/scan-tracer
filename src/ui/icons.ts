@@ -5,6 +5,7 @@ const dot = (cx: number, cy: number, r = 1.4) => `<circle cx="${cx}" cy="${cy}" 
 
 export const ICONS: Record<string, string> = {
   open: svg('<path d="M3 18V6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v2"/><path d="M3 18 5.6 11.6a1 1 0 0 1 .9-.6H21l-2.7 6.4a1 1 0 0 1-.9.6Z"/>'),
+  save: svg('<path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="7"/>'),
   exportObj: svg('<path d="M12 3 4 7.5v9L12 21l8-4.5v-9Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>'),
   export: svg('<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/>'),
   plane: svg(`<path d="M2.5 17 7.5 7h14l-5 10Z"/>${dot(8.5, 13.5)}${dot(12.5, 9.5)}${dot(15.5, 14)}`),
@@ -15,6 +16,8 @@ export const ICONS: Record<string, string> = {
   line: svg('<path d="M6 18 18 6"/><rect x="3" y="16" width="4" height="4" rx=".6"/><rect x="17" y="4" width="4" height="4" rx=".6"/>'),
   circleCenter: svg(`<circle cx="12" cy="12" r="7.5"/>${dot(12, 12, 1.6)}<path d="M12 12 17.3 6.7"/>`),
   circle3: svg(`<circle cx="12" cy="12" r="7.5"/>${dot(12, 4.5, 1.6)}${dot(5.5, 15.8, 1.6)}${dot(18.5, 15.8, 1.6)}`),
+  arc3: svg(`<path d="M4.5 17A8 8 0 0 1 19.5 17"/>${dot(4.5, 17, 1.6)}${dot(12, 9.2, 1.6)}${dot(19.5, 17, 1.6)}`),
+  arcCenter: svg(`<path d="M5 15a7 7 0 0 1 14 0"/>${dot(12, 15, 1.6)}<path d="M12 15h7" stroke-dasharray="1.5 1.8"/>`),
   rect: svg(`<rect x="4" y="6" width="16" height="12" rx=".5"/>${dot(4, 6, 1.5)}${dot(20, 18, 1.5)}`),
   rectCenter: svg(`<rect x="4" y="6" width="16" height="12" rx=".5"/>${dot(12, 12, 1.5)}<path d="M12 12 20 18" stroke-dasharray="1.5 1.8"/>`),
   spline: svg(`<path d="M3 17c3-9 6-9 9-5s6 4 9-5"/>${dot(3, 17)}${dot(12, 12)}${dot(21, 7)}`),

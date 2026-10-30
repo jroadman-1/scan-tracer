@@ -4,7 +4,8 @@ import { Session } from './app/Session';
 import { units } from './app/units';
 import { loadScanFile, type ScanStats } from './io/loadScan';
 import { exportAlignedObj } from './io/objExport';
-import { saveFile } from './io/saveFile';
+import { PROJECT_EXTENSION, readProject, writeProject, type ProjectState } from './io/project';
+import { saveFile, saveFileAs, type SaveHandle } from './io/saveFile';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { describeEntity, Sketch } from './sketch/Sketch';
 import { SketchEditor } from './sketch/SketchEditor';
@@ -20,8 +21,8 @@ import { ExtendTool, TrimTool } from './tools/modifyTools';
 import { OriginTool } from './tools/OriginTool';
 import { PlaneTool } from './tools/PlaneTool';
 import {
-  CenterCircleTool, CenterRectTool, CircleTool, copySelection, CornerRectTool, FilletTool, LineTool, PasteTool, PointTool,
-  SplineTool, type Clipboard,
+  CenterArcTool, CenterCircleTool, CenterRectTool, CircleTool, copySelection, CornerRectTool, FilletTool, LineTool, PasteTool, PointTool,
+  SplineTool, ThreePointArcTool, type Clipboard,
 } from './tools/sketchTools';
 import { StraightenTool } from './tools/StraightenTool';
 import type { Tool, ToolContext } from './tools/Tool';
@@ -95,8 +96,10 @@ function updatePrompt(tool: NavTool = nav.tool) {
   if (!hasScan) prompt.textContent = 'Open a scan to begin';
   else if (selected.length === 1 && selected[0]?.kind === 'spline') {
     prompt.textContent = 'Spline: drag points to reshape · double-click the curve to add a point, or a point to remove it · Delete removes the spline';
+  } else if (selected.length === 1 && selected[0]?.kind === 'arc') {
+    prompt.textContent = 'Arc: drag the curve to bend it · drag an end to move it · D then click it to add a radius dimension · Delete removes it';
   } else if (selected.length) {
-    prompt.textContent = 'Drag a point or a line to move it · drag a circle edge to resize · ⌘C copy · Delete removes the selection · Esc clears it';
+    prompt.textContent = 'Drag a point or a line to move it (Shift locks level/plumb, ⌘ turns off snapping) · drag a circle edge to resize · ⌘C copy · Delete removes the selection';
   }
   else if (session.view2d) prompt.textContent = `2D ${PLANES[session.view2d].label} view: swipe to pan, pinch to zoom · Exit 2D returns to 3D`;
   else if (tool === 'orbit') prompt.textContent = 'Orbit: drag to orbit · Esc to exit';
@@ -141,6 +144,7 @@ function showScanInfo(s: ScanStats) {
 
 async function openFile(file: File) {
   if (loading) return;
+  if (isDirty() && !window.confirm('You have unsaved changes. Open this file anyway and lose them?')) return;
   loading = true;
   $('loading').hidden = false;
   $('loading-name').textContent = file.name;
@@ -149,7 +153,15 @@ async function openFile(file: File) {
   bar.style.width = '0%';
   stage.textContent = 'Reading file';
   try {
-    const { geometry, stats } = await loadScanFile(file, (s, f) => {
+    let project: ProjectState | null = null;
+    let source: Parameters<typeof loadScanFile>[0] = file;
+    if (file.name.toLowerCase().endsWith(PROJECT_EXTENSION)) {
+      stage.textContent = 'Reading project';
+      const read = await readProject(file);
+      project = read.state;
+      source = { name: project.scanName, mesh: read.mesh };
+    }
+    const { geometry, stats } = await loadScanFile(source, (s, f) => {
       stage.textContent = s;
       bar.style.width = `${Math.round(f * 100)}%`;
     });
@@ -158,7 +170,20 @@ async function openFile(file: File) {
     sketchView.attach(viewer.mesh!);
     session.reset();
     hasScan = true;
-    for (const id of ['btn-export', 'caret-export', 'btn-plane', 'btn-straighten', 'btn-flip', 'btn-origin', 'btn-2d', 'btn-point', 'btn-line', 'btn-rect', 'caret-rect', 'btn-circle', 'caret-circle', 'btn-spline', 'btn-trim', 'btn-fillet', 'btn-extend',
+    if (project) {
+      viewer.setAlignment(project.alignment);
+      sketch.restore(project.sketch);
+      if (project.unit !== settings.units) changeSettings({ units: project.unit });
+      if (project.view2d) session.enter2D(project.view2d, { fit: true });
+      else viewer.fit();
+    }
+    // A project opened from the file dialog can't be written back to directly,
+    // so the first save asks where (suggesting the same name).
+    projectHandle = null;
+    projectName = project ? file.name : null;
+    savedRevision = session.revision;
+    updateTitle();
+    for (const id of ['btn-save', 'btn-export', 'caret-export', 'btn-plane', 'btn-straighten', 'btn-flip', 'btn-origin', 'btn-2d', 'btn-point', 'btn-line', 'btn-rect', 'caret-rect', 'btn-circle', 'caret-circle', 'btn-arc', 'caret-arc', 'btn-spline', 'btn-trim', 'btn-fillet', 'btn-extend',
       'btn-dim', 'btn-hv', 'btn-perp', 'btn-parallel', 'btn-coincident']) {
       $<HTMLButtonElement>(id).disabled = false;
     }
@@ -174,6 +199,70 @@ async function openFile(file: File) {
     $('loading').hidden = true;
   }
 }
+
+// --- Saving projects ---------------------------------------------------------------
+
+let projectHandle: SaveHandle | null = null;
+/** The project's file name once saved or opened; null for a scan that hasn't been saved as a project. */
+let projectName: string | null = null;
+let savedRevision = 0;
+
+const isDirty = () => hasScan && session.revision !== savedRevision;
+
+function updateTitle() {
+  const name = projectName ?? scanStats?.name;
+  document.title = name ? `${isDirty() ? '● ' : ''}${name} — Scan Tracer` : 'Scan Tracer';
+  $('btn-save').classList.toggle('dirty', isDirty());
+}
+
+/** Saves the scan and everything done to it as one .scantrace file. Save As always asks where. */
+async function saveProject(saveAs = false) {
+  const mesh = viewer.mesh;
+  if (!mesh || loading || !scanStats) return;
+  endTool(true);
+  const name = projectName ?? `${scanStats.name.replace(/\.[^.]+$/, '')}${PROJECT_EXTENSION}`;
+  const revision = session.revision;
+  loading = true;
+  $('loading').hidden = false;
+  $('loading-name').textContent = name;
+  $('loading-stage').textContent = 'Saving project';
+  $('loading-bar').style.width = '100%';
+  try {
+    const g = mesh.geometry;
+    const blob = await writeProject(
+      {
+        positions: g.attributes.position.array as Float32Array,
+        index: g.index!.array instanceof Uint32Array ? g.index!.array : Uint32Array.from(g.index!.array),
+      },
+      { scanName: scanStats.name, alignment: viewer.alignment, sketch: sketch.snapshot(), unit: units.unit, view2d: session.view2d },
+    );
+    $('loading').hidden = true;
+    const saved = await saveFileAs(
+      name,
+      blob,
+      { description: 'Scan Tracer project', mime: 'application/x-scantrace', extension: PROJECT_EXTENSION },
+      saveAs ? null : projectHandle,
+    );
+    if (!saved) return;
+    if (saved !== 'download') projectHandle = saved;
+    projectName = saved === 'download' ? name : saved.name;
+    savedRevision = revision;
+    updateTitle();
+    prompt.textContent = `Saved ${projectName} (${(blob.size / 1e6).toFixed(1)} MB, scan included)`;
+  } catch (err) {
+    showError(`The project could not be saved (${err instanceof Error ? err.message : String(err)}).`);
+  } finally {
+    loading = false;
+    $('loading').hidden = true;
+  }
+}
+
+$('btn-save').addEventListener('click', (e) => saveProject(e.shiftKey));
+window.addEventListener('beforeunload', (e) => {
+  if (!isDirty()) return;
+  e.preventDefault();
+  e.returnValue = ''; // older browsers need this to show the warning
+});
 
 const chooseFile = () => fileInput.click();
 $('btn-open').addEventListener('click', chooseFile);
@@ -360,6 +449,8 @@ const toolButtons: Record<string, string> = {
   centerRect: 'btn-rect',
   centerCircle: 'btn-circle',
   circle: 'btn-circle',
+  arc3: 'btn-arc',
+  centerArc: 'btn-arc',
   spline: 'btn-spline',
   trim: 'btn-trim',
   fillet: 'btn-fillet',
@@ -420,6 +511,8 @@ const sketchTools = {
   centerRect: (ctx: ToolContext) => new CenterRectTool(ctx),
   centerCircle: (ctx: ToolContext) => new CenterCircleTool(ctx),
   circle: (ctx: ToolContext) => new CircleTool(ctx),
+  arc3: (ctx: ToolContext) => new ThreePointArcTool(ctx),
+  centerArc: (ctx: ToolContext) => new CenterArcTool(ctx),
   spline: (ctx: ToolContext) => new SplineTool(ctx),
   trim: (ctx: ToolContext) => new TrimTool(ctx),
   fillet: (ctx: ToolContext) => new FilletTool(ctx),
@@ -451,6 +544,13 @@ const splits: Record<string, { variants: Variant[]; current: number }> = {
     variants: [
       toolVariant('centerCircle', 'Circle', 'Center Circle', 'circleCenter', 'C'),
       toolVariant('circle', '3-Pt Circle', '3-Point Circle', 'circle3', '⇧C'),
+    ],
+  },
+  'btn-arc': {
+    current: 0,
+    variants: [
+      toolVariant('arc3', 'Arc', '3-Point Arc', 'arc3', 'A'),
+      toolVariant('centerArc', 'Center Arc', 'Center Point Arc', 'arcCenter', '⇧A'),
     ],
   },
 };
@@ -615,6 +715,7 @@ $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 
 session.onChange = () => {
+  updateTitle();
   const undoBtn = $<HTMLButtonElement>('btn-undo');
   const redoBtn = $<HTMLButtonElement>('btn-redo');
   undoBtn.disabled = !session.canUndo;
@@ -655,6 +756,7 @@ window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey) {
     const k = e.key.toLowerCase();
     if (k === 'o') { e.preventDefault(); chooseFile(); }
+    else if (k === 's') { e.preventDefault(); saveProject(e.shiftKey); }
     else if (k === 'e' && hasScan) { e.preventDefault(); exportDxf(); }
     else if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
     else if (k === 'z') { e.preventDefault(); undo(); }
@@ -701,6 +803,7 @@ window.addEventListener('keydown', (e) => {
     case 'r': case 'R': if (hasScan) startTool(e.shiftKey ? sketchTools.centerRect : sketchTools.cornerRect); break;
     case 'l': case 'L': if (hasScan) startTool(sketchTools.line); break;
     case 'c': case 'C': if (hasScan) startTool(e.shiftKey ? sketchTools.circle : sketchTools.centerCircle); break;
+    case 'a': case 'A': if (hasScan) startTool(e.shiftKey ? sketchTools.centerArc : sketchTools.arc3); break;
     case 's': case 'S': if (hasScan) startTool(sketchTools.spline); break;
     case 't': case 'T': if (hasScan) startTool(sketchTools.trim); break;
     case 'x': case 'X': {

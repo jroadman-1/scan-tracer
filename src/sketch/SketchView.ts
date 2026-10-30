@@ -78,6 +78,37 @@ class Layer {
 }
 
 /**
+ * Handles on selected shapes: a white center inside a colored ring, so they
+ * stand out against a line drawn in the same color.
+ */
+class RingDots {
+  readonly ring: THREE.Points;
+  readonly fill: THREE.Points;
+
+  constructor(size: number, dotTex: THREE.Texture) {
+    const make = (dotSize: number, vertexColors: boolean) =>
+      new THREE.Points(
+        new THREE.BufferGeometry(),
+        // Transparent so they draw after the (transparent) lines, in renderOrder.
+        new THREE.PointsMaterial({ size: dotSize, sizeAttenuation: false, vertexColors, map: dotTex, alphaTest: 0.5, depthTest: false, transparent: true }),
+      );
+    this.ring = make(size, true);
+    this.fill = make(size * 0.55, false);
+    this.ring.renderOrder = 21.5;
+    this.fill.renderOrder = 21.6;
+    this.ring.frustumCulled = this.fill.frustumCulled = false;
+  }
+
+  set(dots: { p: THREE.Vector3; color: THREE.Color }[]) {
+    const pos = new THREE.Float32BufferAttribute(dots.flatMap(({ p }) => [p.x, p.y, p.z]), 3);
+    this.ring.geometry.setAttribute('position', pos);
+    this.ring.geometry.setAttribute('color', new THREE.Float32BufferAttribute(dots.flatMap(({ color }) => [color.r, color.g, color.b]), 3));
+    this.fill.geometry.setAttribute('position', pos);
+    this.ring.visible = this.fill.visible = dots.length > 0;
+  }
+}
+
+/**
  * Draws the sketch and tool previews. The group is parented to the scan mesh,
  * so everything is in the scan's coordinates and follows its alignment.
  */
@@ -86,15 +117,18 @@ export class SketchView {
   private readonly committed: Layer;
   private readonly construction: Layer;
   private readonly preview: Layer;
+  private readonly selectedHandles: RingDots;
 
   constructor(pixelRatio: number) {
     const tex = dotTexture();
+    this.selectedHandles = new RingDots(11 * pixelRatio, tex);
     this.committed = new Layer(7 * pixelRatio, tex);
     this.construction = new Layer(7 * pixelRatio, tex, true);
     this.preview = new Layer(8 * pixelRatio, tex);
     this.preview.lines.renderOrder = this.preview.dots.renderOrder = 22;
     this.group.add(
       this.committed.lines, this.committed.dots,
+      this.selectedHandles.ring, this.selectedHandles.fill,
       this.construction.lines,
       this.preview.lines, this.preview.dots,
     );
@@ -123,19 +157,24 @@ export class SketchView {
     const lines: { pts: THREE.Vector3[]; color: THREE.Color }[] = [];
     const dashed: { pts: THREE.Vector3[]; color: THREE.Color }[] = [];
     const dots: { p: THREE.Vector3; color: THREE.Color }[] = [];
+    const rings: { p: THREE.Vector3; color: THREE.Color }[] = [];
     for (const e of sketch.entities) {
       const c = color(e);
+      const handles = sketch.selection.has(e.id) ? rings : dots;
       if (e.kind === 'point') {
-        dots.push({ p: e.pts[0], color: c });
+        handles.push({ p: e.pts[0], color: c });
         continue;
       }
       (e.construction ? dashed : lines).push({ pts: entityPolyline(e), color: c });
-      for (const p of handlePoints(e)) dots.push({ p, color: c });
+      for (const p of handlePoints(e)) handles.push({ p, color: c });
     }
     for (const p of intersections) dots.push({ p, color: COLORS.intersection });
     // Each rectangle's center, which can be dragged to move it.
-    for (const sides of allRects(sketch)) dots.push({ p: rectShape(sides).center, color: color(sides[0]) });
+    for (const sides of allRects(sketch)) {
+      (sides.some((side) => sketch.selection.has(side.id)) ? rings : dots).push({ p: rectShape(sides).center, color: color(sides[0]) });
+    }
     this.committed.set(lines, dots);
+    this.selectedHandles.set(rings);
     this.construction.set(dashed, []);
   }
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Session } from '../app/Session';
 import type { Viewer } from '../viewer/Viewer';
 import { planeAxesLocal, planePointAt, toScreen } from './planePoint';
-import { coincidentPoints, entityPolyline, type Entity, type SketchSnapshot } from './Sketch';
+import { arcMidpoint, coincidentPoints, entityPolyline, type Entity, type SketchSnapshot } from './Sketch';
 import { allRects, enforceCenterLocks, rectShape, setRect, sideNormal, type RectShape } from './rect';
 import type { SnapOverlay, Snapper } from './Snap';
 import { handlePoints, type SketchView } from './SketchView';
@@ -23,9 +23,17 @@ interface Drag {
   entity: Entity;
   /**
    * 'move' shifts `targets` by the drag; 'resize' sets a circle's radius about
-   * `anchor` (its center); 'rect-*' reshape a rectangle so it stays one.
+   * `anchor` (its center); 'bend' makes an arc pass through the cursor with
+   * its ends fixed; 'rect-*' reshape a rectangle so it stays one.
    */
-  mode: 'move' | 'resize' | 'rect-corner' | 'rect-side' | 'rect-move';
+  mode: 'move' | 'resize' | 'bend' | 'rect-corner' | 'rect-side' | 'rect-move';
+  /**
+   * Dragging line ends: the far end of each line meeting there, for
+   * horizontal/vertical guides. `from` belongs to the line that was grabbed.
+   */
+  guides?: { from: THREE.Vector3; alsoFrom: THREE.Vector3[] };
+  /** Arcs with an end being moved, and a point each still passes through, so they keep their bend. */
+  arcs: { entity: Entity; through: THREE.Vector3 }[];
   /** Rectangle drags: its sides, shape at the start, and which corner or side. */
   rect?: { sides: Entity[]; start: RectShape; index: number };
   /** Whether the dragged point snaps (off when dragging a whole line or spline). */
@@ -242,7 +250,7 @@ export class SketchEditor {
     this.canvas.setPointerCapture(e.pointerId);
     this.viewer.setHover(null);
 
-    const base = { pointerId: e.pointerId, entity, before: this.sketch.snapshot(), moved: false };
+    const base = { pointerId: e.pointerId, entity, before: this.sketch.snapshot(), moved: false, arcs: [] };
     const grab = planePointAt(this.viewer, entity.plane, e.clientX, e.clientY);
     const track = (ps: THREE.Vector3[]) => [...new Set(ps)].map((p) => ({ p, orig: p.clone() }));
     const sides = rectCenter?.sides ?? (entity.kind === 'line' && entity.rect ? this.rectOf(entity) : null);
@@ -263,10 +271,14 @@ export class SketchEditor {
       this.drag = { ...base, mode: 'move', snap: true, anchor: handlePoints(entity)[0].clone(), targets: track(entity.pts) };
     } else if (handle) {
       const anchor = handlePoints(entity)[handle.index].clone();
-      this.drag = { ...base, mode: 'move', snap: true, anchor, targets: track(this.pointsAt(anchor)) };
+      const targets = track(this.pointsAt(anchor));
+      this.drag = { ...base, mode: 'move', snap: true, anchor, targets, guides: this.guidesFor(entity, targets.map((t) => t.p)) };
     } else if (entity.kind === 'circle') {
       // Dragging a circle's edge changes its size about the center.
       this.drag = { ...base, mode: 'resize', snap: true, anchor: handlePoints(entity)[0].clone(), targets: [] };
+    } else if (entity.kind === 'arc') {
+      // Dragging an arc's curve bends it; its ends stay put.
+      this.drag = { ...base, mode: 'bend', snap: true, anchor: entity.pts[1].clone(), targets: [] };
     } else if (grab && entity.kind !== 'point') {
       // Dragging a line or spline by its body moves it whole; shapes connected at its ends stretch to follow.
       const ends = [entity.pts[0], entity.pts[entity.pts.length - 1]];
@@ -278,7 +290,27 @@ export class SketchEditor {
         targets: track([...entity.pts, ...ends.flatMap((p) => this.pointsAt(p))]),
       };
     }
+    const d = this.drag;
+    if (d?.mode === 'move') {
+      const moving = new Set(d.targets.map((t) => t.p));
+      for (const other of this.sketch.entities) {
+        if (other.kind !== 'arc' || moving.has(other.pts[1])) continue;
+        if (moving.has(other.pts[0]) || moving.has(other.pts[2])) d.arcs.push({ entity: other, through: other.pts[1].clone() });
+      }
+    }
   };
+
+  /** Far ends of the lines with an end among `moving`, the grabbed line's first. */
+  private guidesFor(grabbed: Entity, moving: THREE.Vector3[]): Drag['guides'] {
+    const set = new Set(moving);
+    const far: THREE.Vector3[] = [];
+    for (const e of [grabbed, ...this.sketch.entities.filter((x) => x !== grabbed)]) {
+      if (e.kind !== 'line' || e.plane !== grabbed.plane) continue;
+      const [a, b] = e.pts;
+      if (set.has(a) !== set.has(b)) far.push((set.has(a) ? b : a).clone());
+    }
+    return far.length ? { from: far[0], alsoFrom: far.slice(1) } : undefined;
+  }
 
   private onDragMove = (e: PointerEvent) => {
     const d = this.drag;
@@ -287,9 +319,10 @@ export class SketchEditor {
     const { plane } = d.entity;
     let p: THREE.Vector3 | null;
     if (d.snap) {
-      const moving = d.rect ? d.rect.sides.flatMap((s) => s.pts) : d.mode === 'resize' ? d.entity.pts : d.targets.map((t) => t.p);
+      const moving = d.rect ? d.rect.sides.flatMap((s) => s.pts) : d.mode === 'resize' || d.mode === 'bend' ? d.entity.pts : d.targets.map((t) => t.p);
       const exclude = new Set(moving);
-      const s = this.snapper.snap(e.clientX, e.clientY, { plane, exclude }, e.metaKey);
+      const g = d.guides;
+      const s = this.snapper.snap(e.clientX, e.clientY, { plane, exclude, from: g?.from, alsoFrom: g?.alsoFrom, lock: e.shiftKey }, e.metaKey);
       this.overlay.show(s);
       p = s?.point ?? null;
     } else {
@@ -308,9 +341,18 @@ export class SketchEditor {
       d.entity.pts[0].copy(d.anchor).addScaledVector(right, r);
       d.entity.pts[1].copy(d.anchor).addScaledVector(up, r);
       d.entity.pts[2].copy(d.anchor).addScaledVector(right, -r);
+    } else if (d.mode === 'bend') {
+      const [a, , b] = d.entity.pts;
+      const mid = arcMidpoint(a, p, b);
+      if (mid) d.entity.pts[1].copy(mid);
     } else {
       const delta = p.sub(d.anchor);
       for (const t of d.targets) t.p.copy(t.orig).add(delta);
+      // Arcs whose end moved keep passing through the same point, re-centered on their new middle.
+      for (const { entity, through } of d.arcs) {
+        const mid = arcMidpoint(entity.pts[0], through, entity.pts[2]);
+        if (mid) entity.pts[1].copy(mid);
+      }
     }
     // Shapes locked to a centerline stay on it, whether the shape or the line moved.
     enforceCenterLocks(this.sketch);
@@ -352,7 +394,7 @@ export class SketchEditor {
     if (d.moved) {
       const label = d.rect
         ? d.mode === 'rect-move' ? 'Move rectangle' : 'Resize rectangle'
-        : d.mode === 'resize' ? 'Resize circle' : d.snap ? 'Move point' : `Move ${d.entity.kind}`;
+        : d.mode === 'resize' ? 'Resize circle' : d.mode === 'bend' ? 'Bend arc' : d.snap ? 'Move point' : `Move ${d.entity.kind}`;
       this.session.recordSketchEdit(label, d.before);
     } else {
       this.click(e); // a press without movement is an ordinary click

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLANES, type PlaneName } from '../app/alignMath';
 import type { Viewer } from '../viewer/Viewer';
 import { planePointAt, toScreen } from './planePoint';
-import { circleThrough, curveEnds, entityPolyline, type Sketch } from './Sketch';
+import { arcMidpoint, circleThrough, curveEnds, entityPolyline, type Sketch } from './Sketch';
 
 // Screen distances (pixels) for each kind of snap.
 const POINT_PX = 10;
@@ -33,6 +33,8 @@ export interface SnapResult {
   entityId?: number;
   /** For guide snaps: the dashed guide from the line's start. */
   guide?: { from: THREE.Vector3; to: THREE.Vector3 };
+  /** A second guide when the point sits where two guides cross. */
+  guide2?: { from: THREE.Vector3; to: THREE.Vector3; kind: SnapKind };
 }
 
 export interface SnapContext {
@@ -41,6 +43,10 @@ export interface SnapContext {
   from?: THREE.Vector3 | null;
   /** A line to be perpendicular or parallel to. */
   refDir?: THREE.Vector3 | null;
+  /** More points to offer horizontal/vertical guides from, e.g. the far end of every line meeting at a dragged corner. */
+  alsoFrom?: THREE.Vector3[];
+  /** Force the line from `from` to horizontal or vertical, whichever is closer (Shift). */
+  lock?: boolean;
   /** Points being dragged, which must not snap to themselves. */
   exclude?: Set<THREE.Vector3>;
 }
@@ -128,6 +134,13 @@ export class Snapper {
   snap(clientX: number, clientY: number, ctx: SnapContext, disabled = false): SnapResult | null {
     const raw = planePointAt(this.viewer, ctx.plane, clientX, clientY);
     if (!raw || !this.viewer.mesh) return raw ? { point: raw, kind: null } : null;
+    if (ctx.lock && ctx.from) {
+      const { right, up } = planeBasis(this.viewer, ctx.plane);
+      const d = raw.clone().sub(ctx.from);
+      const horizontal = Math.abs(d.dot(right)) >= Math.abs(d.dot(up));
+      const point = ctx.from.clone().addScaledVector(horizontal ? right : up, d.dot(horizontal ? right : up));
+      return { point, kind: horizontal ? 'horizontal' : 'vertical', guide: { from: ctx.from.clone(), to: point.clone() } };
+    }
     if (disabled) return { point: raw, kind: null };
     const cursor = new THREE.Vector2(clientX, clientY);
     const screen = (p: THREE.Vector3) => toScreen(this.viewer, p);
@@ -151,6 +164,10 @@ export class Snapper {
       if (e.kind === 'line' && !e.pts.some(excluded)) {
         candidates.push({ p: e.pts[0].clone().lerp(e.pts[1], 0.5), kind: 'midpoint', entityId: e.id });
       }
+      if (e.kind === 'arc' && !e.pts.some(excluded)) {
+        const mid = arcMidpoint(e.pts[0], e.pts[1], e.pts[2]);
+        if (mid) candidates.push({ p: mid, kind: 'midpoint', entityId: e.id });
+      }
     }
     for (const p of this.intersections()) candidates.push({ p, kind: 'intersection' });
 
@@ -166,30 +183,51 @@ export class Snapper {
     }
     if (best) return { point: best.p.clone(), kind: best.kind, entityId: best.entityId };
 
-    // 2. Guides from the start of the line being drawn.
-    if (ctx.from && cursor.distanceTo(screen(ctx.from)) > GUIDE_MIN_PX) {
-      const { right, up, normal } = planeBasis(this.viewer, ctx.plane);
+    // 2. Guides: horizontal and vertical (and perpendicular or parallel to
+    // refDir) from the start of the line being drawn, or from the far end of
+    // each line whose end is being dragged.
+    const { right, up, normal } = planeBasis(this.viewer, ctx.plane);
+    const origins = [ctx.from, ...(ctx.alsoFrom ?? [])].filter((o): o is THREE.Vector3 => !!o);
+    const hits: { origin: THREE.Vector3; dir: THREE.Vector3; kind: SnapKind; q: THREE.Vector3; d: number }[] = [];
+    origins.forEach((origin, i) => {
+      const reach = cursor.distanceTo(screen(origin));
+      if (reach <= GUIDE_MIN_PX) return;
       const guides: { dir: THREE.Vector3; kind: SnapKind }[] = [];
-      if (ctx.refDir && ctx.refDir.lengthSq() > 0) {
+      if (i === 0 && ctx.refDir && ctx.refDir.lengthSq() > 0) {
         const along = ctx.refDir.clone().normalize();
         guides.push({ dir: new THREE.Vector3().crossVectors(normal, along).normalize(), kind: 'perpendicular' });
         guides.push({ dir: along, kind: 'parallel' });
       }
       guides.push({ dir: right, kind: 'horizontal' }, { dir: up, kind: 'vertical' });
-
-      const reach = cursor.distanceTo(screen(ctx.from));
-      const tolerance = Math.max(GUIDE_PX, reach * Math.tan(THREE.MathUtils.degToRad(GUIDE_DEG)));
-      let guide: SnapResult | null = null;
-      let guideD = tolerance;
+      let best: (typeof hits)[number] | null = null;
+      let bestD = Math.max(GUIDE_PX, reach * Math.tan(THREE.MathUtils.degToRad(GUIDE_DEG)));
       for (const g of guides) {
-        const q = ctx.from.clone().addScaledVector(g.dir, raw.clone().sub(ctx.from).dot(g.dir));
+        const q = origin.clone().addScaledVector(g.dir, raw.clone().sub(origin).dot(g.dir));
         const d = cursor.distanceTo(screen(q));
-        if (d < guideD) {
-          guideD = d;
-          guide = { point: q, kind: g.kind, guide: { from: ctx.from.clone(), to: q.clone() } };
+        if (d < bestD) {
+          bestD = d;
+          best = { origin, dir: g.dir, kind: g.kind, q, d };
         }
       }
-      if (guide) return guide;
+      if (best) hits.push(best);
+    });
+    hits.sort((x, y) => x.d - y.d);
+    const first = hits[0];
+    if (first) {
+      // Guides from two different lines: snap to where they cross, so both lines line up at once.
+      const second = hits.find((h) => h.origin !== first.origin && Math.abs(h.dir.dot(first.dir)) < 0.999);
+      if (second) {
+        const cross = (x: THREE.Vector3, y: THREE.Vector3) => new THREE.Vector3().crossVectors(x, y).dot(normal);
+        const t = cross(second.origin.clone().sub(first.origin), second.dir) / cross(first.dir, second.dir);
+        const point = first.origin.clone().addScaledVector(first.dir, t);
+        return {
+          point,
+          kind: first.kind,
+          guide: { from: first.origin.clone(), to: point.clone() },
+          guide2: { from: second.origin.clone(), to: point.clone(), kind: second.kind },
+        };
+      }
+      return { point: first.q, kind: first.kind, guide: { from: first.origin.clone(), to: first.q } };
     }
 
     // 3. Anywhere along a curve.
@@ -251,9 +289,10 @@ export class SnapOverlay {
       return el;
     };
 
-    if (s.guide) {
+    for (const g of [s.guide, s.guide2]) {
+      if (!g) continue;
       // Extend the guide well past the cursor so it reads as a direction.
-      const from = local(s.guide.from);
+      const from = local(g.from);
       const dir = at.clone().sub(from).normalize();
       const far = at.clone().addScaledVector(dir, 4000);
       add('line', { x1: from.x, y1: from.y, x2: far.x, y2: far.y, class: 'snap-guide' });
@@ -280,7 +319,7 @@ export class SnapOverlay {
       default:
         add('circle', { cx: x, cy: y, r: 3, class: 'snap-glyph filled' });
     }
-    const label = LABELS[s.kind];
+    const label = [LABELS[s.kind], s.guide2 && LABELS[s.guide2.kind]].filter(Boolean).join(' + ');
     if (label) {
       const t = add('text', { x: x + 10, y: y - 10, class: 'snap-label' });
       t.textContent = label;

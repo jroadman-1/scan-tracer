@@ -149,6 +149,9 @@ button, select, input { font: inherit; color: inherit; }
 .tb-btn:disabled { opacity: 0.38; cursor: default; }
 .tb-btn.active { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .tb-compact { min-width: 36px; padding: 7px; }
+/* Unsaved changes. */
+#btn-save { position: relative; }
+#btn-save.dirty::after { content: ''; position: absolute; top: 5px; right: 11px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 /* Icon-only buttons, sized to line up with the labeled ones. */
 .tb-icon { min-width: 38px; padding: 5px 6px 3px; justify-content: center; }
 .tb-icon i svg { width: 22px; height: 22px; }
@@ -549,6 +552,9 @@ kbd {
   left: 0;
   top: 0;
   z-index: 6;
+  /* Follows the cursor, so a quick flick can land on it: let clicks through
+     to the drawing unless a value is being typed. */
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -627,9 +633,18 @@ kbd {
   color: var(--muted);
 }
 
-@media (max-width: 1500px) {
+@media (max-width: 1700px) {
   .brand { padding-right: 8px; }
   .brand-name { display: none; }
+  /* Tighter buttons so the whole toolbar fits on laptop screens. */
+  .tb-btn { min-width: 40px; padding: 5px 3px 3px; }
+  .tb-group { padding: 0 3px; }
+  .tb-row { gap: 1px; }
+}
+
+@media (max-width: 1360px) {
+  .tb-btn { min-width: 34px; padding: 5px 2px 3px; font-size: 10.5px; }
+  .tb-group { padding: 0 2px; }
 }
 
 @media (max-width: 760px) {
@@ -638,3 +653,5 @@ kbd {
   #nav-hint { display: none; }
   .brand { display: none; }
 }
+
+.hud:focus-within { pointer-events: auto; }

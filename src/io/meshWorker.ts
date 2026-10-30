@@ -3,11 +3,11 @@
 
 import { BufferAttribute, BufferGeometry } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE } from './meshData';
+import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE, type RawMesh } from './meshData';
 
 interface WorkerScope {
   postMessage(message: unknown, transfer?: Transferable[]): void;
-  onmessage: ((e: MessageEvent<{ file: File }>) => void) | null;
+  onmessage: ((e: MessageEvent<{ file?: File; mesh?: RawMesh }>) => void) | null;
 }
 const scope = self as unknown as WorkerScope;
 
@@ -21,20 +21,26 @@ function progress(stage: string, fraction: number) {
 }
 
 scope.onmessage = async (e) => {
-  const { file } = e.data;
+  const { file, mesh: given } = e.data;
   try {
-    progress('Reading file', 0);
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(await file.arrayBuffer());
-    } catch (err) {
-      throw new Error(`The file could not be read (${err instanceof Error ? err.message : err}).`);
-    }
-    const parse = parserFor(file.name);
-    if (!parse) throw new Error(UNSUPPORTED_FILE);
+    let mesh: RawMesh;
+    if (given) {
+      // Already read, e.g. from a project file.
+      mesh = given;
+    } else {
+      progress('Reading file', 0);
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(await file!.arrayBuffer());
+      } catch (err) {
+        throw new Error(`The file could not be read (${err instanceof Error ? err.message : err}).`);
+      }
+      const parse = parserFor(file!.name);
+      if (!parse) throw new Error(UNSUPPORTED_FILE);
 
-    const mesh = parse(bytes, (f) => progress('Reading geometry', 0.03 + 0.6 * f));
-    if (mesh.index.length === 0) throw new Error('No triangles were found in this file.');
+      mesh = parse(bytes, (f) => progress('Reading geometry', 0.03 + 0.6 * f));
+      if (mesh.index.length === 0) throw new Error('No triangles were found in this file.');
+    }
 
     progress('Computing normals', 0.64);
     const normals = computeNormals(mesh.positions, mesh.index);

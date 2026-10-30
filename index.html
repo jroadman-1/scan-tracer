@@ -13,7 +13,8 @@
 
         <div class="tb-group">
           <div class="tb-row">
-            <button class="tb-btn" id="btn-open" title="Open a scan (⌘O)"><i data-icon="open"></i><span>Open</span></button>
+            <button class="tb-btn" id="btn-open" title="Open a scan or project (⌘O)"><i data-icon="open"></i><span>Open</span></button>
+            <button class="tb-btn" id="btn-save" disabled title="Save project, including the scan (⌘S) · Save As: ⇧⌘S"><i data-icon="save"></i><span>Save</span></button>
             <div class="tb-split">
               <button class="tb-btn" id="btn-export" disabled><i></i><span></span></button>
               <button class="tb-caret" id="caret-export" disabled title="Export options" aria-label="Export options"><i data-icon="chevron"></i></button>
@@ -43,6 +44,10 @@
             <div class="tb-split">
               <button class="tb-btn" id="btn-circle" disabled><i></i><span></span></button>
               <button class="tb-caret" id="caret-circle" disabled title="Circle types" aria-label="Circle types"><i data-icon="chevron"></i></button>
+            </div>
+            <div class="tb-split">
+              <button class="tb-btn" id="btn-arc" disabled><i></i><span></span></button>
+              <button class="tb-caret" id="caret-arc" disabled title="Arc types" aria-label="Arc types"><i data-icon="chevron"></i></button>
             </div>
             <button class="tb-btn" id="btn-spline" disabled title="Fit-Point Spline (S)"><i data-icon="spline"></i><span>Spline</span></button>
           </div>
@@ -106,7 +111,7 @@
             <div class="card empty-card">
               <i data-icon="open" class="empty-icon"></i>
               <h2>Open a scan</h2>
-              <p>Drop an OBJ, STL or PLY file here, or</p>
+              <p>Drop an OBJ, STL or PLY scan or a .scantrace project here, or</p>
               <button class="btn-primary" id="btn-open-empty">Choose file…</button>
               <p class="fine">Files are processed on this computer and never uploaded.</p>
             </div>
@@ -216,7 +221,7 @@
 
     <div class="card tb-menu" id="tb-menu" hidden></div>
 
-    <input type="file" id="file-input" accept=".obj,.stl,.ply" hidden />
+    <input type="file" id="file-input" accept=".obj,.stl,.ply,.scantrace" hidden />
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE } from './meshData';
+import { computeCurvature, computeNormals, computeVertexLevels, parserFor, UNSUPPORTED_FILE, type RawMesh } from './meshData';
 
 export interface ScanStats {
   name: string;
@@ -28,24 +28,27 @@ interface MeshArrays {
 /** Errors the worker reported about the file itself, as opposed to the worker failing to run. */
 class FileError extends Error {}
 
-export async function loadScanFile(file: File, onProgress: Progress): Promise<LoadedScan> {
+/** A scan to load: a mesh file, or a mesh already read (e.g. from a project). */
+export type ScanSource = File | { name: string; mesh: RawMesh };
+
+export async function loadScanFile(source: ScanSource, onProgress: Progress): Promise<LoadedScan> {
   const t0 = performance.now();
   let geometry: THREE.BufferGeometry;
   try {
-    geometry = await loadInWorker(file, onProgress);
+    geometry = await loadInWorker(source, onProgress);
   } catch (err) {
     if (err instanceof FileError) throw err;
     // The worker couldn't start (for example, its script failed to load).
     // Do the same work here; the page is unresponsive meanwhile, but it loads.
     console.warn('Background loader failed, loading on the main thread instead:', err);
-    geometry = await loadOnMainThread(file, onProgress);
+    geometry = await loadOnMainThread(source, onProgress);
   }
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return {
     geometry,
     stats: {
-      name: file.name,
+      name: source.name,
       vertices: geometry.attributes.position.count,
       triangles: geometry.index!.count / 3,
       size: geometry.boundingBox!.getSize(new THREE.Vector3()),
@@ -64,7 +67,7 @@ function buildGeometry({ positions, normals, curvature, levels, spacing }: MeshA
   return geometry;
 }
 
-function loadInWorker(file: File, onProgress: Progress): Promise<THREE.BufferGeometry> {
+function loadInWorker(source: ScanSource, onProgress: Progress): Promise<THREE.BufferGeometry> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./meshWorker.ts', import.meta.url), { type: 'module' });
 
@@ -91,29 +94,34 @@ function loadInWorker(file: File, onProgress: Progress): Promise<THREE.BufferGeo
       reject(new Error(e.message || 'worker failed to start'));
     };
 
-    worker.postMessage({ file });
+    worker.postMessage(source instanceof File ? { file: source } : { mesh: source.mesh });
   });
 }
 
 const nextFrame = () => new Promise((r) => setTimeout(r, 0));
 
-async function loadOnMainThread(file: File, onProgress: Progress): Promise<THREE.BufferGeometry> {
-  const parse = parserFor(file.name);
-  if (!parse) throw new Error(UNSUPPORTED_FILE);
+async function loadOnMainThread(source: ScanSource, onProgress: Progress): Promise<THREE.BufferGeometry> {
+  let mesh: RawMesh;
+  if (source instanceof File) {
+    const parse = parserFor(source.name);
+    if (!parse) throw new Error(UNSUPPORTED_FILE);
 
-  onProgress('Reading file', 0);
-  await nextFrame();
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await file.arrayBuffer());
-  } catch (err) {
-    throw new Error(`The file could not be read (${err instanceof Error ? err.message : err}).`);
+    onProgress('Reading file', 0);
+    await nextFrame();
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await source.arrayBuffer());
+    } catch (err) {
+      throw new Error(`The file could not be read (${err instanceof Error ? err.message : err}).`);
+    }
+
+    onProgress('Reading geometry', 0.05);
+    await nextFrame();
+    mesh = parse(bytes, () => {});
+    if (mesh.index.length === 0) throw new Error('No triangles were found in this file.');
+  } else {
+    mesh = source.mesh;
   }
-
-  onProgress('Reading geometry', 0.05);
-  await nextFrame();
-  const mesh = parse(bytes, () => {});
-  if (mesh.index.length === 0) throw new Error('No triangles were found in this file.');
 
   onProgress('Analyzing surface', 0.65);
   await nextFrame();
